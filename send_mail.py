@@ -30,11 +30,14 @@ verdict = find(r'class="verdict"[^>]*>([^<]+)<')
 score = find(r'class="score mono"[^>]*>([^<]+)<')
 action = find(r'권장 행동: ([^<]+)<')
 asof = find(r'기준일 <b>([^<]+)</b>')
+kind = find(r'기준일 <b>[^<]+</b> ([^<]+)<')        # "종가" 또는 "장중"
+warn = find(r'class="tag warn">([^<]+)<')          # 휴장·개장 전·장중 안내 (없으면 빈 문자열)
 
 today = datetime.now().strftime("%Y-%m-%d")
+warn_line = f"\n참고: {warn}" if warn else ""
 body = f"""오늘의 시장 브리핑이 갱신되었습니다.
 
-기준일: {asof} 종가
+기준일: {asof} {kind}{warn_line}
 종합 판정: {verdict} ({score} / ±100)
 권장 행동: {action}
 

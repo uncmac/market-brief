@@ -1139,23 +1139,26 @@ def render_html(payload):
     stt = a.get("status", "current")
     if stt == "weekend":
         asof_tag = ('<span class="tag warn">오늘 ' + a["today"] + ' (' + a["today_dow"]
-                    + ') 주말 휴장 → 직전 거래일 데이터</span>')
+                    + ')은 주말 휴장 → 직전 영업일 종가 기준</span>')
     elif stt == "pre_open":
-        asof_tag = '<span class="tag warn">개장 전 → 직전 거래일 종가 기준</span>'
+        asof_tag = '<span class="tag warn">오늘 개장 전 → 직전 영업일 종가 기준</span>'
     elif stt == "holiday":
         asof_tag = ('<span class="tag warn">오늘 ' + a["today"] + ' (' + a["today_dow"]
-                    + ') 휴장 → 직전 거래일 데이터</span>')
+                    + ')은 휴장일 → 직전 영업일 종가 기준</span>')
+    elif stt == "intraday":
+        asof_tag = '<span class="tag warn">장중 실행 → 오늘 데이터는 미완성 장중 가격 (종가 아님)</span>'
     else:
-        asof_tag = ''  # 개장일에 오늘자 데이터가 반영된 정상 상태
+        asof_tag = ''  # 마감 후 실행: 오늘자 확정 종가가 반영된 정상 상태
     mode_tag = '<span class="tag mock">모의 데이터</span>' if payload["mode"] == "demo" else ''
 
     head = ('<header><div class="eyebrow mono">Morning Brief · v2.5 · '
             + ('Mock' if payload["mode"] == "demo" else 'Live') + ' Data</div>'
             + "<h1>Jaeyoung Cho's Morning Brief</h1>"
             + '<div class="sub">구독자를 위한 데일리 시장 브리핑 · P1~P9 매매 원칙 기반</div>'
-            + '<div class="asof"><span class="tag">기준일 <b>' + a["equity"] + ' (' + a["equity_dow"] + ')</b> 종가</span>'
+            + '<div class="asof"><span class="tag">기준일 <b>' + a["equity"] + ' (' + a["equity_dow"] + ')</b> '
+            + ('장중' if stt == "intraday" else '종가') + '</span>'
             + asof_tag
-            + '<span class="tag">BTC 기준 <b>' + a["btc"] + ' (' + a["btc_dow"] + ')</b> · 주말 포함</span>'
+            + '<span class="tag">BTC 기준 <b>' + a["btc"] + ' (' + a["btc_dow"] + ')</b> · 24시간 거래라 주말·휴일에도 최신</span>'
             + mode_tag + '</div></header>')
 
     panel = _overall_panel(payload["tfs"], payload["combo"], payload.get("digest") or [])
@@ -1216,7 +1219,11 @@ def build_payload(demo=False, fg=None):
     btc_asof = data["btc"].index[-1].date()
     # 데이터가 오늘자가 아니면 사유를 구분: 주말 / 개장 전(평일 아침) / 휴장일
     if eq_asof >= today:
-        mkt_status = "current"
+        # 오늘자 봉이 있음: 장중이면 아직 미완성 봉(종가 아님), 마감 후면 확정 종가
+        if today.weekday() < 5 and (9, 30) <= (now_et.hour, now_et.minute) < (16, 0):
+            mkt_status = "intraday"
+        else:
+            mkt_status = "current"
     elif today.weekday() >= 5:
         mkt_status = "weekend"
     elif (now_et.hour, now_et.minute) < (9, 30):
@@ -1269,9 +1276,11 @@ def build_payload(demo=False, fg=None):
         "tfs": tfs, "signals": sigs, "digest": digest, "states": ST, "tfLabel": TF_LABEL,
         "generated": now_et.strftime("%Y-%m-%d %H:%M ET"),
     })
-    note = {"current": "", "weekend": " — 주말 휴장, 직전 거래일 데이터 사용",
-            "pre_open": " — 개장 전, 직전 거래일 종가 기준",
-            "holiday": " — 휴장일, 직전 거래일 데이터 사용"}[mkt_status]
+    note = {"current": "",
+            "intraday": " — 장중 실행, 오늘 데이터는 미완성 장중 가격(종가 아님)",
+            "weekend": " — 주말 휴장, 직전 영업일 종가 기준",
+            "pre_open": " — 개장 전, 직전 영업일 종가 기준",
+            "holiday": " — 휴장일, 직전 영업일 종가 기준"}[mkt_status]
     print(f"\n기준일: {eq_asof} ({DOW_KR[eq_asof.weekday()]})" + note)
     return payload
 
