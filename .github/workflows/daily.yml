@@ -31,3 +31,10 @@ jobs:
           git add index.html
           git diff --cached --quiet || git commit -m "auto update $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push
+
+      - name: Send email notification
+        env:
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_PASS: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python send_mail.py
