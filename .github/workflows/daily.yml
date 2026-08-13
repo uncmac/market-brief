@@ -1,0 +1,33 @@
+name: daily-dashboard
+
+on:
+  schedule:
+    - cron: '0 11 * * *'   # 매일 11:00 UTC = 미 동부 아침 6~7시 (개장 전 브리핑)
+  workflow_dispatch:        # 수동 실행 버튼
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas requests tzdata
+
+      - name: Build dashboard
+        run: python market_dashboard.py -o index.html
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name "dashboard-bot"
+          git config user.email "actions@github.com"
+          git add index.html
+          git diff --cached --quiet || git commit -m "auto update $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
