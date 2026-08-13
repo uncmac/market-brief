@@ -1303,7 +1303,8 @@ def publish(src="market_dashboard.html"):
     for cmd in (["git", "add", "-A"],
                 ["git", "commit", "-m",
                  "dashboard update " + datetime.now().strftime("%Y-%m-%d %H:%M")],
-                ["git", "pull", "--rebase", "--quiet"],  # 서버 자동 갱신과 충돌 방지
+                # 서버 자동 갱신과 충돌 시 방금 만든 로컬 파일 우선 (-X theirs = rebase에서 로컬 커밋 편)
+                ["git", "pull", "--rebase", "-X", "theirs", "--quiet"],
                 ["git", "push"]):
         r = subprocess.run(cmd, cwd=PAGES_REPO, capture_output=True, text=True)
         if r.returncode != 0:
