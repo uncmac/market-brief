@@ -25,7 +25,7 @@ market_dashboard.py — 매매 원칙 신호 대시보드 (yfinance 연동, v0.2
     헤더에 기준일과 휴장 여부를 명시한다. BTC는 주말에도 거래되므로
     최신(주말 포함) 데이터를 그대로 쓴다 — P9(BTC 선행)의 취지와 일치.
 """
-import argparse, json, sys, warnings
+import argparse, json, sys, time, warnings
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import numpy as np
@@ -66,6 +66,17 @@ ST = {
     "AMBER": {"key": "AMBER", "label": "AMBER",       "color": "#eab308", "desc": "중립·관망"},
     "G2R":   {"key": "G2R",   "label": "GREEN → RED", "color": "#fb923c", "desc": "고점·악화 전환"},
     "RED":   {"key": "RED",   "label": "RED",         "color": "#ef4444", "desc": "하락 위험"},
+}
+# 미국 증시 휴장일 (NYSE, 관측일 기준). 매년 말 다음 해 날짜 추가 필요.
+# 조기폐장일(반일장)은 포함하지 않음. 목록에 없는 해가 되면 휴장일이
+# "데이터 지연"으로 표시될 뿐 동작은 유지된다.
+US_MARKET_HOLIDAYS = {
+    # 2026
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    # 2027
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
 }
 DOW_KR = ["월", "화", "수", "목", "금", "토", "일"]
 TF_LABEL = {"daily": "일간", "weekly": "주간", "monthly": "월간"}
@@ -236,10 +247,19 @@ def fetch_real(fg_manual=None):
     import yfinance as yf
 
     def hist(t, period=CONFIG["period"], interval="1d"):
-        df = yf.Ticker(t).history(period=period, interval=interval, auto_adjust=True)
-        if df.empty:
-            raise RuntimeError(f"{t} 데이터 없음")
-        return df
+        """일시적 조회 실패(레이트리밋 등)에 대비해 최대 3회 재시도."""
+        last = None
+        for attempt in range(3):
+            try:
+                df = yf.Ticker(t).history(period=period, interval=interval, auto_adjust=True)
+                if not df.empty:
+                    return df
+                last = RuntimeError(f"{t} 데이터 없음")
+            except Exception as e:
+                last = e
+            if attempt < 2:
+                time.sleep(5 * (attempt + 1))
+        raise RuntimeError(f"{t} 조회 실패 (3회 시도): {last}")
 
     spy = hist("SPY")
     spy.index = spy.index.tz_localize(None)
@@ -250,9 +270,14 @@ def fetch_real(fg_manual=None):
 
     fang = {}
     for t in CONFIG["fang"]:
-        s = hist(t)["Close"]
-        s.index = s.index.tz_localize(None)
-        fang[t] = s
+        try:
+            s = hist(t)["Close"]
+            s.index = s.index.tz_localize(None)
+            fang[t] = s
+        except Exception as e:
+            print(f"[경고] FANG {t} 조회 실패 → 제외: {e}")  # 바스켓 평균이라 일부 누락 허용
+    if not fang:
+        raise RuntimeError("FANG 전 종목 조회 실패")
     fang = pd.DataFrame(fang).dropna()
 
     watch = {}
@@ -1147,6 +1172,9 @@ def render_html(payload):
                     + ')은 휴장일 → 직전 영업일 종가 기준</span>')
     elif stt == "intraday":
         asof_tag = '<span class="tag warn">장중 실행 → 오늘 데이터는 미완성 장중 가격 (종가 아님)</span>'
+    elif stt == "stale":
+        # 주의: 이 문구에 '휴장일 →'이 들어가면 안 됨 (서버 휴장 판정 grep과 충돌)
+        asof_tag = '<span class="tag warn">데이터 지연 → 직전 영업일 종가 기준</span>'
     else:
         asof_tag = ''  # 마감 후 실행: 오늘자 확정 종가가 반영된 정상 상태
     mode_tag = '<span class="tag mock">모의 데이터</span>' if payload["mode"] == "demo" else ''
@@ -1228,8 +1256,14 @@ def build_payload(demo=False, fg=None):
         mkt_status = "weekend"
     elif (now_et.hour, now_et.minute) < (9, 30):
         mkt_status = "pre_open"
-    else:
+    elif str(today) in US_MARKET_HOLIDAYS:
         mkt_status = "holiday"
+    else:
+        # 평일 장 시작 후인데 오늘자 봉이 없고 휴장일 목록에도 없음
+        # → 야후 응답 지연으로 간주 (휴장일로 오판해 갱신·메일을 막지 않도록 구분)
+        mkt_status = "stale"
+        print("[경고] 개장 시간인데 오늘자 봉 없음 → 데이터 지연으로 처리 "
+              "(실제 휴장일이면 US_MARKET_HOLIDAYS에 날짜를 추가하세요)")
 
     tfs, mets, states = {}, {}, {}
     for tf in ("daily", "weekly", "monthly"):
@@ -1280,7 +1314,8 @@ def build_payload(demo=False, fg=None):
             "intraday": " — 장중 실행, 오늘 데이터는 미완성 장중 가격(종가 아님)",
             "weekend": " — 주말 휴장, 직전 영업일 종가 기준",
             "pre_open": " — 개장 전, 직전 영업일 종가 기준",
-            "holiday": " — 휴장일, 직전 영업일 종가 기준"}[mkt_status]
+            "holiday": " — 휴장일, 직전 영업일 종가 기준",
+            "stale": " — 데이터 지연, 직전 영업일 종가 기준"}[mkt_status]
     print(f"\n기준일: {eq_asof} ({DOW_KR[eq_asof.weekday()]})" + note)
     return payload
 

@@ -1,12 +1,28 @@
-name: daily-dashboard
+name: dashboard-updates
 
+# GitHub cron은 UTC 고정이라 서머타임(DST)을 모름 → 후보 시각을 넉넉히 등록하고
+# 실행 시점에 실제 시카고/뉴욕 시간을 확인하는 게이트로 필터링한다.
+# GitHub 스케줄은 5~30분 지연이 흔하므로 메일 창을 넓게(CT 8:45~9:44) 잡고,
+# .mail_sent 마커(시카고 날짜 커밋)로 하루 1회 발송을 보장한다.
 on:
   schedule:
-    - cron: '0 11 * * *'   # 매일 11:00 UTC = 미 동부 아침 6~7시 (개장 전 브리핑)
-  workflow_dispatch:        # 수동 실행 버튼
+    - cron: '50 13,14 * * 1-5'   # 평일 8:50 AM Central 이메일 슬롯 (DST 양쪽 후보)
+    - cron: '30 13-20 * * 1-5'   # 평일 장중 매시 30분 갱신 (ET 9:30~16:30 게이트로 필터)
+    - cron: '15 20,21 * * 1-5'   # 마감 직후(~16:15 ET) 확정 종가 스냅샷
+    - cron: '0 12 * * 0,6'       # 주말 아침 1회 (BTC·뉴스 갱신, 메일 없음)
+  workflow_dispatch:
+    inputs:
+      send_mail:
+        description: '메일도 발송할지'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+
+concurrency:
+  group: dashboard
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -14,27 +30,91 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Gate (시간대·요일·중복 판정)
+        id: gate
+        run: |
+          DOW=$(TZ=America/New_York date +%u)                 # 1=월 ... 7=일
+          ET_H=$(TZ=America/New_York date +%H); ET_M=$(TZ=America/New_York date +%M)
+          CT_H=$(TZ=America/Chicago date +%H); CT_M=$(TZ=America/Chicago date +%M)
+          ET_NOW=$((10#$ET_H * 60 + 10#$ET_M))
+          CT_NOW=$((10#$CT_H * 60 + 10#$CT_M))
+          TODAY_CT=$(TZ=America/Chicago date +%F)
+          SCHED="${{ github.event.schedule }}"
+          RUN=false; MAIL=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RUN=true
+            if [ "${{ inputs.send_mail }}" = "true" ]; then MAIL=true; fi
+          else
+            if [ "$DOW" -ge 6 ]; then RUN=true; fi            # 주말 아침 refresh
+            # 이메일: 전용 cron에서만, CT 8:45(525)~9:44(<585) 창 (지연 허용,
+            # 잘못된 DST 후보 9:50 CT는 제외). 이미 오늘 보냈으면(.mail_sent) 생략.
+            if [ "$SCHED" = "50 13,14 * * 1-5" ] && [ "$DOW" -le 5 ] \
+               && [ "$CT_NOW" -ge 525 ] && [ "$CT_NOW" -lt 585 ]; then
+              if [ "$(cat .mail_sent 2>/dev/null)" = "$TODAY_CT" ]; then
+                echo "already mailed today ($TODAY_CT) — skip mail"
+              else
+                RUN=true; MAIL=true
+              fi
+            fi
+            if [ "$DOW" -le 5 ] && [ "$ET_NOW" -ge 570 ] && [ "$ET_NOW" -le 990 ]; then
+              RUN=true                                        # ET 9:30(570)~16:30(990) 장중·마감 갱신
+            fi
+          fi
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          echo "mail=$MAIL" >> "$GITHUB_OUTPUT"
+          echo "today_ct=$TODAY_CT" >> "$GITHUB_OUTPUT"
+          echo "gate: run=$RUN mail=$MAIL (ET $ET_H:$ET_M, CT $CT_H:$CT_M, DOW=$DOW, sched='$SCHED')"
+
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
         with:
           python-version: '3.12'
 
       - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
         run: pip install yfinance pandas requests tzdata
 
       - name: Build dashboard
+        if: steps.gate.outputs.run == 'true'
         run: python market_dashboard.py -o index.html
 
+      - name: Holiday check
+        id: holiday
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          # 평일 휴장일(공휴일)이면 대시보드에 '휴장일 →' 문구가 생김 → 갱신·메일 모두 생략
+          # (주말 문구 '주말 휴장 →'과 데이터 지연 문구 '데이터 지연 →'은 여기 걸리지 않음)
+          if grep -q '휴장일 →' index.html; then CLOSED=true; else CLOSED=false; fi
+          echo "closed=$CLOSED" >> "$GITHUB_OUTPUT"
+          echo "holiday: $CLOSED"
+
       - name: Commit & push if changed
+        if: steps.gate.outputs.run == 'true' && steps.holiday.outputs.closed != 'true'
         run: |
           git config user.name "dashboard-bot"
           git config user.email "actions@github.com"
           git add index.html
           git diff --cached --quiet || git commit -m "auto update $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git pull --rebase -X theirs
           git push
 
       - name: Send email notification
+        if: steps.gate.outputs.mail == 'true' && steps.holiday.outputs.closed != 'true'
         env:
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
           MAIL_PASS: ${{ secrets.GMAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
         run: python send_mail.py
+
+      - name: Record mail marker
+        if: steps.gate.outputs.mail == 'true' && steps.holiday.outputs.closed != 'true'
+        run: |
+          git config user.name "dashboard-bot"
+          git config user.email "actions@github.com"
+          echo "${{ steps.gate.outputs.today_ct }}" > .mail_sent
+          git add .mail_sent
+          git diff --cached --quiet || {
+            git commit -m "mail sent ${{ steps.gate.outputs.today_ct }}"
+            git pull --rebase -X theirs
+            git push
+          }
