@@ -7,6 +7,7 @@ name: dashboard-updates
 on:
   schedule:
     - cron: '50 13,14 * * 1-5'   # 평일 8:50 AM Central 이메일 슬롯 (DST 양쪽 후보)
+    - cron: '20 14,15 * * 1-5'   # 예비 메일 슬롯 (~9:20 CT, DST 양쪽) — GitHub이 이벤트를 누락하는 날 대비
     - cron: '30 13-20 * * 1-5'   # 평일 장중 매시 30분 갱신 (ET 9:30~16:30 게이트로 필터)
     - cron: '15 20,21 * * 1-5'   # 마감 직후(~16:15 ET) 확정 종가 스냅샷
     - cron: '0 12 * * 0,6'       # 주말 아침 1회 (BTC·뉴스 갱신, 메일 없음)
@@ -46,9 +47,11 @@ jobs:
             if [ "${{ inputs.send_mail }}" = "true" ]; then MAIL=true; fi
           else
             if [ "$DOW" -ge 6 ]; then RUN=true; fi            # 주말 아침 refresh
-            # 이메일: 전용 cron에서만, CT 8:45(525)~9:44(<585) 창 (지연 허용,
-            # 잘못된 DST 후보 9:50 CT는 제외). 이미 오늘 보냈으면(.mail_sent) 생략.
-            if [ "$SCHED" = "50 13,14 * * 1-5" ] && [ "$DOW" -le 5 ] \
+            # 이메일: 평일 CT 8:45(525)~9:44(<585) 창에 도착한 "모든" 스케줄 실행이 후보.
+            # (GitHub이 특정 이벤트를 통째로 누락하는 날이 있어 전용 cron 제한을 제거 —
+            #  2026-08-28 아침 메일 누락이 실제 사례. 하루 1회 보장은 .mail_sent 마커가 담당.)
+            # 잘못된 DST 후보(여름 14:50 UTC = 9:50 CT)는 창 밖이라 자연히 제외된다.
+            if [ "$DOW" -le 5 ] \
                && [ "$CT_NOW" -ge 525 ] && [ "$CT_NOW" -lt 585 ]; then
               if [ "$(cat .mail_sent 2>/dev/null)" = "$TODAY_CT" ]; then
                 echo "already mailed today ($TODAY_CT) — skip mail"
