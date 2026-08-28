@@ -1064,6 +1064,8 @@ body{background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans KR',system-
 .lang-btn .opt-ko{background:#1e2a40;color:var(--tx);font-weight:600}
 .lang-sw:checked ~ .wrap .lang-btn .opt-ko{background:transparent;color:var(--mut);font-weight:400}
 .lang-sw:checked ~ .wrap .lang-btn .opt-en{background:#1e2a40;color:var(--tx);font-weight:600}
+/* 좁은 화면: 절대위치 버튼이 헤더 첫 줄과 겹치므로 흐름 배치(헤더 위, 오른쪽 정렬)로 전환 */
+@media(max-width:640px){.lang-btn{position:static;display:flex;width:max-content;margin:0 0 12px auto}}
 .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
 h1{font-size:24px;margin-top:4px}
 .sub{color:var(--mut);margin-top:4px}
