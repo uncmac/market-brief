@@ -43,10 +43,11 @@ CONFIG = {
                   "META", "NVDU", "QQQ", "NVDA", "VLO", "IBIT", "AMZN", "PLTR",
                   "MSFT", "SPXL", "XLE", "GOOGL", "PHO", "UDOW", "KO", "NFLX",
                   "BLK", "FAS", "AAPL", "AAL"],
-    # 숏 비중 표시 대상 (티커, 표시명). SpaceX는 비상장이라 숏 데이터가 없음
+    # 숏 비중 표시 대상 (티커, 한글명, 영문명). SpaceX는 비상장이라 숏 데이터가 없음
     # → SpaceX 지분을 보유한 상장 펀드 DXYZ(Destiny Tech100)로 대체 표시
-    "short_watch": [("TSLA", "테슬라"), ("NVDA", "엔비디아"), ("AMD", "AMD"),
-                    ("MU", "마이크론"), ("DXYZ", "SpaceX 프록시")],
+    "short_watch": [("TSLA", "테슬라", "Tesla"), ("NVDA", "엔비디아", "NVIDIA"),
+                    ("AMD", "AMD", "AMD"), ("MU", "마이크론", "Micron"),
+                    ("DXYZ", "SpaceX 프록시", "SpaceX proxy")],
     "period": "2y",            # 일간 데이터 조회 기간
     "ma_window": 180,          # 180일선 (P5)
     "lookback": {"daily": 5, "weekly": 4, "monthly": 3},   # RS/모멘텀 봉수
@@ -78,8 +79,13 @@ US_MARKET_HOLIDAYS = {
     "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
     "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
 }
-DOW_KR = ["월", "화", "수", "목", "금", "토", "일"]
-TF_LABEL = {"daily": "일간", "weekly": "주간", "monthly": "월간"}
+# 다국어: 대시보드는 한국어·영어 두 벌을 렌더링하고 CSS 토글로 전환한다.
+LANGS = ("ko", "en")
+DOW = {"ko": ["월", "화", "수", "목", "금", "토", "일"],
+       "en": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]}
+DOW_KR = DOW["ko"]  # 콘솔 로그용
+TF_LABEL = {"ko": {"daily": "일간", "weekly": "주간", "monthly": "월간"},
+            "en": {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly"}}
 
 
 def fmt(v, d=1):
@@ -186,8 +192,8 @@ def market_calendar(today):
     주말만 제외하고 미국 휴장일은 미반영(만기일이 휴장이면 실제로는 전일로 이동)."""
     from datetime import date
 
-    def dstr(d):
-        return f"{d} ({DOW_KR[d.weekday()]})"
+    def dinfo(d):
+        return {"date": str(d), "dow": d.weekday()}  # 요일은 렌더링 때 언어별로 표기
 
     opex = _third_friday(today.year, today.month)
     y2, m2 = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
@@ -197,11 +203,11 @@ def market_calendar(today):
     bd = pd.bdate_range(date(today.year, today.month, 1), mend)
     wd_s, wd_e = bd[-4].date(), bd[-1].date()
     return {
-        "opex": {"date": dstr(opex), "dday": (opex - today).days,
+        "opex": {**dinfo(opex), "dday": (opex - today).days,
                  "triple": today.month in (3, 6, 9, 12), "passed": opex < today},
-        "opex_next": {"date": dstr(opex_next), "dday": (opex_next - today).days,
+        "opex_next": {**dinfo(opex_next), "dday": (opex_next - today).days,
                       "triple": m2 in (3, 6, 9, 12)},
-        "wd": {"start": dstr(wd_s), "end": dstr(wd_e), "dday": (wd_s - today).days,
+        "wd": {"start": dinfo(wd_s), "end": dinfo(wd_e), "dday": (wd_s - today).days,
                "active": wd_s <= today <= wd_e,
                "quarter": today.month in (3, 6, 9, 12)},
     }
@@ -211,14 +217,14 @@ def fetch_shorts():
     """숏 비중(NASDAQ/NYSE 집계, 월 2회 발표 → 약 2주 지연) — yfinance info 필드 사용."""
     import yfinance as yf
     out = []
-    for t, name in CONFIG["short_watch"]:
+    for t, name, name_en in CONFIG["short_watch"]:
         try:
             info = yf.Ticker(t).info
             spf = info.get("shortPercentOfFloat")
             ss, sp = info.get("sharesShort"), info.get("sharesShortPriorMonth")
             asof = info.get("dateShortInterest")
             out.append({
-                "ticker": t, "name": name,
+                "ticker": t, "name": name, "name_en": name_en,
                 "pct": round(spf * 100, 1) if spf else None,          # 유동주식 대비 숏 %
                 "dtc": info.get("shortRatio"),                        # 숏 커버 소요일
                 "chg": round((ss / sp - 1) * 100, 1) if ss and sp else None,  # 숏 주식수 전월 대비 %
@@ -231,11 +237,11 @@ def fetch_shorts():
 
 def _demo_shorts():
     return [
-        {"ticker": "TSLA", "name": "테슬라", "pct": 17.8, "dtc": 2.4, "chg": 6.3, "asof": "2026-07-15"},
-        {"ticker": "NVDA", "name": "엔비디아", "pct": 1.1, "dtc": 1.2, "chg": -3.1, "asof": "2026-07-15"},
-        {"ticker": "AMD", "name": "AMD", "pct": 4.6, "dtc": 1.9, "chg": 2.2, "asof": "2026-07-15"},
-        {"ticker": "MU", "name": "마이크론", "pct": 3.2, "dtc": 2.1, "chg": -1.4, "asof": "2026-07-15"},
-        {"ticker": "DXYZ", "name": "SpaceX 프록시", "pct": 8.9, "dtc": 3.5, "chg": 11.0, "asof": "2026-07-15"},
+        {"ticker": "TSLA", "name": "테슬라", "name_en": "Tesla", "pct": 17.8, "dtc": 2.4, "chg": 6.3, "asof": "2026-07-15"},
+        {"ticker": "NVDA", "name": "엔비디아", "name_en": "NVIDIA", "pct": 1.1, "dtc": 1.2, "chg": -3.1, "asof": "2026-07-15"},
+        {"ticker": "AMD", "name": "AMD", "name_en": "AMD", "pct": 4.6, "dtc": 1.9, "chg": 2.2, "asof": "2026-07-15"},
+        {"ticker": "MU", "name": "마이크론", "name_en": "Micron", "pct": 3.2, "dtc": 2.1, "chg": -1.4, "asof": "2026-07-15"},
+        {"ticker": "DXYZ", "name": "SpaceX 프록시", "name_en": "SpaceX proxy", "pct": 8.9, "dtc": 3.5, "chg": 11.0, "asof": "2026-07-15"},
     ]
 
 
@@ -654,285 +660,381 @@ TONE_COLORS = {"buy": "#22c55e", "hold": "#2dd4bf", "caution": "#eab308",
                "reduce": "#ef4444", "neutral": "#8a94a8"}
 
 
-def plain_digest(d, st):
+SIGNAL_NAMES = {
+    "ko": {"fang": "FANG 상대강도", "macd": "V-바닥 / MACD 반전", "fg": "CNN Fear & Greed",
+           "vix": "불확실성 정점", "ma": "SPY vs 180일선", "eod": "장마감 기관 매수",
+           "lead": "차기 주도주 후보", "btc": "BTC 선행 지표"},
+    "en": {"fang": "FANG Relative Strength", "macd": "V-Bottom / MACD Reversal", "fg": "CNN Fear & Greed",
+           "vix": "Uncertainty Peak", "ma": "SPY vs 180-Day MA", "eod": "Late-Day Institutional Buying",
+           "lead": "Next Leadership Candidates", "btc": "BTC Leading Indicator"},
+}
+
+
+def plain_digest(d, st, lang="ko"):
     """종합 판정 바로 아래에 붙는 '오늘의 신호 한 줄 요약'.
     개별 신호를 누구나 읽을 수 있는 평이한 말로 한 줄씩 풀어 쓴다."""
     out = []
-
-    names = {"fang": "FANG 상대강도", "macd": "V-바닥 / MACD 반전", "fg": "CNN Fear & Greed",
-             "vix": "불확실성 정점", "ma": "SPY vs 180일선", "eod": "장마감 기관 매수",
-             "lead": "차기 주도주 후보", "btc": "BTC 선행 지표"}
+    ko = lang == "ko"
+    names = SIGNAL_NAMES[lang]
 
     def add(num, key, text):
         out.append({"num": num, "state": st.get(key, "AMBER"),
                     "name": names[key], "text": text})
 
     if d["belowMA"]:
-        t = {"R2G": "대형 기술주들이 시장보다 먼저 오르기 시작했습니다. 바닥에서 자주 나오는 모습입니다.",
-             "RED": "대형 기술주들이 시장보다 더 크게 빠지고 있습니다."}.get(
-            st.get("fang"), "대형 기술주들의 힘은 시장과 비슷한 수준입니다.")
+        t = ({"R2G": "대형 기술주들이 시장보다 먼저 오르기 시작했습니다. 바닥에서 자주 나오는 모습입니다.",
+              "RED": "대형 기술주들이 시장보다 더 크게 빠지고 있습니다."} if ko else
+             {"R2G": "Big Tech has started rising ahead of the market — a pattern often seen near bottoms.",
+              "RED": "Big Tech is falling harder than the market."}).get(
+            st.get("fang"),
+            "대형 기술주들의 힘은 시장과 비슷한 수준입니다." if ko else "Big Tech is moving roughly in line with the market.")
     else:
-        t = {"G2R": "대형 기술주들이 먼저 힘이 빠지고 있어 조심할 때입니다.",
-             "GREEN": "대형 기술주들이 시장을 잘 이끌고 있습니다."}.get(
-            st.get("fang"), "대형 기술주들의 힘은 시장과 비슷한 수준입니다.")
+        t = ({"G2R": "대형 기술주들이 먼저 힘이 빠지고 있어 조심할 때입니다.",
+              "GREEN": "대형 기술주들이 시장을 잘 이끌고 있습니다."} if ko else
+             {"G2R": "Big Tech is losing steam first — time to be careful.",
+              "GREEN": "Big Tech is leading the market well."}).get(
+            st.get("fang"),
+            "대형 기술주들의 힘은 시장과 비슷한 수준입니다." if ko else "Big Tech is moving roughly in line with the market.")
     add(1, "fang", t)
 
-    add(2, "macd", {"turn": "떨어지던 힘이 줄어들고 방향이 위로 바뀌는 중입니다.",
-                    "up": "가격을 밀어 올리는 힘이 유지되고 있습니다.",
-                    "roll": "오르던 힘이 꺾이기 시작했습니다.",
-                    "down": "아직 내려가는 힘이 더 셉니다."}[d["macd"]])
+    add(2, "macd", ({"turn": "떨어지던 힘이 줄어들고 방향이 위로 바뀌는 중입니다.",
+                     "up": "가격을 밀어 올리는 힘이 유지되고 있습니다.",
+                     "roll": "오르던 힘이 꺾이기 시작했습니다.",
+                     "down": "아직 내려가는 힘이 더 셉니다."} if ko else
+                    {"turn": "Downward pressure is fading and momentum is turning up.",
+                     "up": "Upward momentum is holding.",
+                     "roll": "The rally's momentum has started to roll over.",
+                     "down": "Downward pressure still dominates."})[d["macd"]])
 
     v = d["fg"]
     if v is None:
-        t = "투자 심리 지수는 오늘 확인하지 못했습니다."
+        t = "투자 심리 지수는 오늘 확인하지 못했습니다." if ko else "The sentiment index could not be read today."
     elif v <= 10:
-        t = f"투자 심리가 {v}점으로 극도로 얼어붙었습니다. 역설적으로 바닥이 가까울 때 나오는 수치입니다."
+        t = (f"투자 심리가 {v}점으로 극도로 얼어붙었습니다. 역설적으로 바닥이 가까울 때 나오는 수치입니다." if ko else
+             f"Sentiment is extremely fearful at {v} — paradoxically a reading that often appears near bottoms.")
     elif v <= 25:
-        t = f"투자 심리가 {v}점으로, 시장에 겁먹은 사람이 많습니다."
+        t = (f"투자 심리가 {v}점으로, 시장에 겁먹은 사람이 많습니다." if ko else
+             f"Sentiment is fearful at {v}; many investors are scared.")
     elif v >= 75:
-        t = f"투자 심리가 {v}점으로 과열입니다. 모두가 낙관적일 때를 조심해야 합니다."
+        t = (f"투자 심리가 {v}점으로 과열입니다. 모두가 낙관적일 때를 조심해야 합니다." if ko else
+             f"Sentiment is overheated at {v}. Be careful when everyone is optimistic.")
     elif v >= 55:
-        t = f"투자 심리는 {v}점으로 밝은 편입니다."
+        t = f"투자 심리는 {v}점으로 밝은 편입니다." if ko else f"Sentiment is upbeat at {v}."
     else:
-        t = f"투자 심리는 {v}점으로 중간 수준입니다."
+        t = f"투자 심리는 {v}점으로 중간 수준입니다." if ko else f"Sentiment is neutral at {v}."
     add(3, "fg", t)
 
     vv, vd = d["vix"], d["vixD"]
     if vv >= 40 and vd <= 0:
-        t = "시장의 불안이 최고조를 지나 가라앉기 시작했습니다."
+        t = "시장의 불안이 최고조를 지나 가라앉기 시작했습니다." if ko else "Market fear looks past its peak and is starting to subside."
     elif vv >= 40:
-        t = "시장이 매우 불안한 상태입니다."
+        t = "시장이 매우 불안한 상태입니다." if ko else "The market is highly stressed."
     elif vv >= 28:
-        t = "시장이 꽤 불안한 상태입니다."
+        t = "시장이 꽤 불안한 상태입니다." if ko else "The market is fairly nervous."
     elif vv <= 17:
-        t = "시장 분위기는 차분합니다."
+        t = "시장 분위기는 차분합니다." if ko else "The market mood is calm."
     else:
-        t = "시장의 불안 수준은 보통입니다."
+        t = "시장의 불안 수준은 보통입니다." if ko else "Market anxiety is at a normal level."
     add(4, "vix", t)
 
     dist, slope = d["maDist"], d["maSlope"]
     if dist <= 0:
-        t = f"S&P 500이 장기 평균선보다 {abs(dist):.1f}% 아래에 있습니다. " + (
+        t = (f"S&P 500이 장기 평균선보다 {abs(dist):.1f}% 아래에 있습니다. " + (
             "좋은 주식을 싸게 담아 볼 수 있는 구간입니다." if slope > 0
-            else "싸게 살 구간이지만 평균선도 내려가고 있어 서두를 필요는 없습니다.")
+            else "싸게 살 구간이지만 평균선도 내려가고 있어 서두를 필요는 없습니다.")) if ko else (
+            f"The S&P 500 is {abs(dist):.1f}% below its long-term average. " + (
+                "A zone where good stocks can be picked up cheaply." if slope > 0
+                else "A bargain zone, but the average itself is falling — no need to rush."))
     else:
-        t = f"S&P 500이 장기 평균선보다 {dist:.1f}% 위에서 순항하고 있습니다."
+        t = (f"S&P 500이 장기 평균선보다 {dist:.1f}% 위에서 순항하고 있습니다." if ko else
+             f"The S&P 500 is cruising {dist:.1f}% above its long-term average.")
     add(5, "ma", t)
 
     stk = d["eod"]
     if stk >= 3:
-        t = f"장 마감 직전에 큰손들이 {stk}일째 사들이고 있습니다. 바닥 근처에서 자주 보이는 움직임입니다."
+        t = (f"장 마감 직전에 큰손들이 {stk}일째 사들이고 있습니다. 바닥 근처에서 자주 보이는 움직임입니다." if ko else
+             f"Big players have been buying into the close for {stk} straight days — a pattern often seen near bottoms.")
     elif stk > 0:
-        t = f"마감 직전 매수가 {stk}일째 보이지만 아직 확실하지 않습니다."
+        t = (f"마감 직전 매수가 {stk}일째 보이지만 아직 확실하지 않습니다." if ko else
+             f"Late-day buying has shown up for {stk} day(s), but it is not yet conclusive.")
     else:
-        t = "마감 직전의 큰손 매수는 보이지 않습니다."
+        t = "마감 직전의 큰손 매수는 보이지 않습니다." if ko else "No institutional buying into the close today."
     add(6, "eod", t)
 
     ld = d["leaders"]
     if ld:
-        t = ("잘 버티며 먼저 오르는 종목들(" + ", ".join(ld[:3])
-             + (" 등" if len(ld) > 3 else "") + ")이 다음 상승의 후보입니다.")
+        t = (("잘 버티며 먼저 오르는 종목들(" + ", ".join(ld[:3])
+              + (" 등" if len(ld) > 3 else "") + ")이 다음 상승의 후보입니다.") if ko else
+             ("Names holding up and rising first (" + ", ".join(ld[:3])
+              + (", among others" if len(ld) > 3 else "") + ") are candidates to lead the next advance."))
     else:
-        t = "아직 특별히 눈에 띄는 후보 종목은 없습니다."
+        t = "아직 특별히 눈에 띄는 후보 종목은 없습니다." if ko else "No standout candidates yet."
     add(7, "lead", t)
 
     if d["belowMA"] and d["btcTurned"]:
-        t = "비트코인이 먼저 반등을 시작했습니다. 주식시장이 며칠 뒤 따라오는 경우가 많았습니다."
+        t = ("비트코인이 먼저 반등을 시작했습니다. 주식시장이 며칠 뒤 따라오는 경우가 많았습니다." if ko else
+             "Bitcoin has started rebounding first — stocks have often followed a few days later.")
     elif d["belowMA"]:
-        t = "비트코인에서도 아직 반등 신호는 없습니다."
+        t = "비트코인에서도 아직 반등 신호는 없습니다." if ko else "No rebound signal from Bitcoin yet either."
     elif st.get("btc") == "G2R":
-        t = "비트코인이 먼저 흔들리고 있어 경계 신호입니다."
+        t = "비트코인이 먼저 흔들리고 있어 경계 신호입니다." if ko else "Bitcoin is wobbling first — a caution signal."
     elif st.get("btc") == "GREEN":
-        t = "비트코인도 순항하고 있습니다."
+        t = "비트코인도 순항하고 있습니다." if ko else "Bitcoin is cruising as well."
     else:
-        t = "비트코인은 큰 움직임이 없습니다."
+        t = "비트코인은 큰 움직임이 없습니다." if ko else "Bitcoin shows no major move."
     add(9, "btc", t)
     return out
 
 
-def combo_advice(mo, wk, dy):
+def combo_advice(mo, wk, dy, lang="ko"):
     """월간/주간/일간 종합 상태 조합 → (국면명, 권장 행동, 톤).
-    위에서부터 첫 일치 규칙 적용. 규칙 추가·수정 지점."""
+    위에서부터 첫 일치 규칙 적용. 규칙 추가·수정 지점 (문구는 ko/en 쌍으로 유지)."""
     UP, DN = ("GREEN", "R2G"), ("RED", "G2R")
+    ko = lang == "ko"
     rules = [
         (mo in DN and wk in DN and dy in DN,
-         "시장 전체가 내리막", "주식은 줄이고 현금을 확보하세요. 잘 버티는 종목만 지켜보기", "reduce"),
+         ("시장 전체가 내리막", "주식은 줄이고 현금을 확보하세요. 잘 버티는 종목만 지켜보기") if ko else
+         ("Broad market in decline", "Reduce stock exposure and raise cash. Just watch the names holding up"), "reduce"),
         (dy == "R2G" and wk in DN and mo in DN,
-         "바닥 신호가 살짝 보임", "아직 확실하지 않습니다. 며칠 더 지켜보고, 사더라도 아주 조금만", "caution"),
+         ("바닥 신호가 살짝 보임", "아직 확실하지 않습니다. 며칠 더 지켜보고, 사더라도 아주 조금만") if ko else
+         ("Faint bottoming signal", "Not confirmed yet. Watch a few more days; if you buy, buy only a little"), "caution"),
         (wk == "R2G" and dy in UP and mo != "GREEN",
-         "바닥을 다지는 중", "관심 우량주를 소액으로 나눠서 사기 시작 (1단계)", "buy"),
+         ("바닥을 다지는 중", "관심 우량주를 소액으로 나눠서 사기 시작 (1단계)") if ko else
+         ("Building a bottom", "Start buying quality watchlist names in small installments (stage 1)"), "buy"),
         (mo in ("RED", "AMBER", "G2R") and wk in UP and dy == "GREEN",
-         "반등이 확인됨", "사는 양을 한 단계 늘리기 (2단계)", "buy"),
+         ("반등이 확인됨", "사는 양을 한 단계 늘리기 (2단계)") if ko else
+         ("Rebound confirmed", "Step up the buying one notch (stage 2)"), "buy"),
         (mo == "R2G" and (wk in DN or dy in DN),
-         "신호가 엇갈림", "큰 흐름은 좋아지는데 단기가 흔들립니다. 추가 매수는 잠시 멈추고 기다리기", "caution"),
+         ("신호가 엇갈림", "큰 흐름은 좋아지는데 단기가 흔들립니다. 추가 매수는 잠시 멈추고 기다리기") if ko else
+         ("Mixed signals", "The big trend is improving but the short term is shaky. Pause new buying and wait"), "caution"),
         (mo == "R2G",
-         "큰 흐름이 좋아지는 중", "목표한 비중까지 조금씩 늘려 가기", "buy"),
+         ("큰 흐름이 좋아지는 중", "목표한 비중까지 조금씩 늘려 가기") if ko else
+         ("Big trend improving", "Gradually build toward your target allocation"), "buy"),
         (mo == "GREEN" and wk not in DN and dy in ("RED", "R2G"),
-         "상승장 속 잠깐 쉬어가는 구간", "좋은 종목을 싸게 살 기회입니다. 나눠서 매수", "buy"),
+         ("상승장 속 잠깐 쉬어가는 구간", "좋은 종목을 싸게 살 기회입니다. 나눠서 매수") if ko else
+         ("Brief pause within an uptrend", "A chance to buy good names cheaply. Buy in installments"), "buy"),
         (mo == "GREEN" and wk == "GREEN" and dy == "G2R",
-         "단기 과열 뒤 주춤", "새로 사는 건 잠시 쉬고, 가진 것은 그대로 유지", "caution"),
+         ("단기 과열 뒤 주춤", "새로 사는 건 잠시 쉬고, 가진 것은 그대로 유지") if ko else
+         ("Stalling after short-term overheating", "Hold off on new buys; keep what you own"), "caution"),
         (mo == "GREEN" and wk in DN,
-         "조정이 올 수 있음", "이익 난 것 일부는 팔고, 새 매수는 중단", "reduce"),
+         ("조정이 올 수 있음", "이익 난 것 일부는 팔고, 새 매수는 중단") if ko else
+         ("A correction may be coming", "Take some profits and stop new buying"), "reduce"),
         (mo == "GREEN" and wk in ("GREEN", "AMBER") and dy in ("GREEN", "AMBER"),
-         "꾸준한 상승 흐름", "그대로 보유. 쉬어가는 구간이 오면 추가 매수 고려", "hold"),
+         ("꾸준한 상승 흐름", "그대로 보유. 쉬어가는 구간이 오면 추가 매수 고려") if ko else
+         ("Steady uptrend", "Stay invested. Consider adding on pullbacks"), "hold"),
     ]
-    for cond, name, act, tone in rules:
+    for cond, (name, act), tone in rules:
         if cond:
             return name, act, tone
     avg = (SC[mo] + SC[wk] + SC[dy]) / 3
     if avg >= 0.35:
-        return "좋은 쪽에 가까움", "그대로 보유", "hold"
+        return (("좋은 쪽에 가까움", "그대로 보유") if ko else ("Leaning positive", "Stay invested")) + ("hold",)
     if avg <= -0.35:
-        return "나쁜 쪽에 가까움", "방어 위주로. 현금 확보", "reduce"
-    return "방향이 뚜렷하지 않음", "일단 관망하며 가진 것만 유지", "neutral"
+        return (("나쁜 쪽에 가까움", "방어 위주로. 현금 확보") if ko else ("Leaning negative", "Play defense. Raise cash")) + ("reduce",)
+    return (("방향이 뚜렷하지 않음", "일단 관망하며 가진 것만 유지") if ko else
+            ("No clear direction", "Wait and see; just hold what you own")) + ("neutral",)
 
 
 # ============================================================
 # 카드 텍스트
 # ============================================================
-def brief_texts(d, w, m):
+def brief_texts(d, w, m, lang="ko"):
     """카드 문구. metric = 오늘 값, sub = 평가(주간·월간까지 종합한 해석),
-    rule = 기준(판정 임계값). 문장은 완결형으로 기술한다."""
-    ph = {"down": "하락 계속", "turn": lambda x: f"바닥 반전 {x}봉째",
-          "up": "상승 흐름", "roll": lambda x: f"고점 이탈 {x}봉째"}
+    rule = 기준(판정 임계값). 문장은 완결형으로 기술한다. 문구는 ko/en 쌍."""
+    ko = lang == "ko"
+    ph = ({"down": "하락 계속", "turn": lambda x: f"바닥 반전 {x}봉째",
+           "up": "상승 흐름", "roll": lambda x: f"고점 이탈 {x}봉째"} if ko else
+          {"down": "Still falling", "turn": lambda x: f"Bottom turn, bar {x}",
+           "up": "Uptrend", "roll": lambda x: f"Rolling over, bar {x}"})
 
     def phase(mm):
         p = ph[mm["macd"]]
         return p(mm["histStreak"]) if callable(p) else p
 
+    L_D, L_W, L_M = (("일간", "주간", "월간") if ko else ("Daily", "Weekly", "Monthly"))
     below = d["belowMA"]
 
     # P1 FANG
     f_d, f_w, f_m = d["fangRS"], w["fangRS"], m["fangRS"]
-    f_line = f"일간 {fmt(f_d)}%p · 주간 {fmt(f_w)}%p · 월간 {fmt(f_m)}%p."
+    f_line = f"{L_D} {fmt(f_d)}%p · {L_W} {fmt(f_w)}%p · {L_M} {fmt(f_m)}%p."
     if below and f_d >= 1.5:
-        f_msg = ("월간은 아직 뒤처지지만 일간부터 앞서기 시작해 바닥 반등 초기 신호로 해석됩니다."
-                 if f_m < 0 else "세 주기 모두 지수를 앞서고 있어 반등이 자리 잡는 신호입니다.")
+        f_msg = (("월간은 아직 뒤처지지만 일간부터 앞서기 시작해 바닥 반등 초기 신호로 해석됩니다."
+                  if f_m < 0 else "세 주기 모두 지수를 앞서고 있어 반등이 자리 잡는 신호입니다.") if ko else
+                 ("Monthly still lags, but daily has started to lead — an early sign of a bottoming rebound."
+                  if f_m < 0 else "All three timeframes are beating the index — the rebound is taking hold."))
     elif below and f_d <= -1.5:
-        f_msg = "FANG이 낙폭을 주도하고 있어 하락이 더 이어질 가능성이 큽니다."
+        f_msg = ("FANG이 낙폭을 주도하고 있어 하락이 더 이어질 가능성이 큽니다." if ko else
+                 "FANG is leading the decline — further downside is likely.")
     elif not below and f_d <= -2:
-        f_msg = "상승장에서 FANG이 먼저 뒤처지기 시작해 고점 경계 신호입니다."
+        f_msg = ("상승장에서 FANG이 먼저 뒤처지기 시작해 고점 경계 신호입니다." if ko else
+                 "FANG is starting to lag in an uptrend — a topping warning.")
     elif not below and f_d >= 0:
-        f_msg = ("장기와 단기 모두 FANG이 앞서고 있어 상승 흐름이 건강합니다."
-                 if f_m >= 0 else "장기 열세는 남아 있으나 단기 주도력은 유지되고 있습니다.")
+        f_msg = (("장기와 단기 모두 FANG이 앞서고 있어 상승 흐름이 건강합니다."
+                  if f_m >= 0 else "장기 열세는 남아 있으나 단기 주도력은 유지되고 있습니다.") if ko else
+                 ("FANG leads on both long and short horizons — a healthy uptrend."
+                  if f_m >= 0 else "Long-term weakness remains, but short-term leadership is intact."))
     else:
-        f_msg = "뚜렷한 방향성이 없어 판단을 유보합니다."
+        f_msg = ("뚜렷한 방향성이 없어 판단을 유보합니다." if ko else
+                 "No clear direction — judgment reserved.")
 
     # P2 MACD
     p_d, p_w, p_m = d["macd"], w["macd"], m["macd"]
-    c_line = f"일간 {phase(d)} · 주간 {phase(w)} · 월간 {phase(m)}."
+    c_line = f"{L_D} {phase(d)} · {L_W} {phase(w)} · {L_M} {phase(m)}."
     if p_d in ("turn", "up") and p_m == "down":
-        c_msg = "단기부터 차례로 돌아서는 전형적인 바닥 형성 순서입니다."
+        c_msg = ("단기부터 차례로 돌아서는 전형적인 바닥 형성 순서입니다." if ko else
+                 "Short-term turning first — the classic bottoming sequence.")
     elif p_d == "up" and p_w == "up" and p_m == "up":
-        c_msg = "세 주기 모두 상승 흐름을 유지하고 있습니다."
+        c_msg = ("세 주기 모두 상승 흐름을 유지하고 있습니다." if ko else
+                 "All three timeframes remain in uptrends.")
     elif p_d in ("roll", "down") and p_m == "up":
-        c_msg = "장기 추세는 살아 있으나 단기가 먼저 꺾여 조정 초기 가능성이 있습니다."
+        c_msg = ("장기 추세는 살아 있으나 단기가 먼저 꺾여 조정 초기 가능성이 있습니다." if ko else
+                 "The long-term trend is intact, but the short term has rolled over first — possibly an early correction.")
     elif p_d == "down" and p_w == "down":
-        c_msg = "전 주기에서 하락 압력이 이어지고 있습니다."
+        c_msg = ("전 주기에서 하락 압력이 이어지고 있습니다." if ko else
+                 "Downward pressure persists across timeframes.")
     else:
-        c_msg = "주기별 신호가 엇갈려 추가 확인이 필요합니다."
+        c_msg = ("주기별 신호가 엇갈려 추가 확인이 필요합니다." if ko else
+                 "Signals are mixed across timeframes — needs more confirmation.")
 
     # P3 F&G (일간 전용, 주·월 변화폭으로 맥락 제공)
     if d["fg"] is None:
-        fg_txt, fg_msg = "N/A", "조회에 실패했습니다. run(fg=값)으로 수동 입력할 수 있습니다."
+        fg_txt = "N/A"
+        fg_msg = ("조회에 실패했습니다. run(fg=값)으로 수동 입력할 수 있습니다." if ko else
+                  "Lookup failed. You can enter it manually with run(fg=value).")
     else:
         v = d["fg"]
-        zone = ("극단 공포" if v <= 10 else "공포" if v <= 25
-                else "과열" if v >= 75 else "낙관" if v >= 55 else "중립")
+        zone = (("극단 공포" if v <= 10 else "공포" if v <= 25
+                 else "과열" if v >= 75 else "낙관" if v >= 55 else "중립") if ko else
+                ("extreme fear" if v <= 10 else "fear" if v <= 25
+                 else "overheated" if v >= 75 else "optimistic" if v >= 55 else "neutral"))
         fg_txt = f"{v} ({fmt(d['fgD'], 0)})"
         dw, dm = w["fgD"], m["fgD"]
         if dm < 0 and dw > 0:
-            tail = f"한 달 전보다 {abs(dm)} 낮지만 최근 일주일 사이 {dw} 회복했습니다."
+            tail = (f"한 달 전보다 {abs(dm)} 낮지만 최근 일주일 사이 {dw} 회복했습니다." if ko else
+                    f"Still {abs(dm)} below a month ago, but up {dw} over the past week.")
         elif dw > 0 and dm > 0:
-            tail = "심리가 꾸준히 개선되고 있습니다."
+            tail = "심리가 꾸준히 개선되고 있습니다." if ko else "Sentiment keeps improving."
         elif dw < 0 and dm < 0:
-            tail = "심리가 계속 위축되고 있습니다."
+            tail = "심리가 계속 위축되고 있습니다." if ko else "Sentiment keeps deteriorating."
         else:
-            tail = f"일주일 변화 {fmt(dw, 0)}, 한 달 변화 {fmt(dm, 0)}입니다."
-        fg_msg = f"현재 {v}, {zone} 구간입니다. " + tail
+            tail = (f"일주일 변화 {fmt(dw, 0)}, 한 달 변화 {fmt(dm, 0)}입니다." if ko else
+                    f"Change: {fmt(dw, 0)} over a week, {fmt(dm, 0)} over a month.")
+        fg_msg = (f"현재 {v}, {zone} 구간입니다. " if ko else f"Now {v}, in the {zone} zone. ") + tail
 
     # P4 VIX
     vv, vd, vm = d["vix"], d["vixD"], m["vixD"]
-    vzone = ("공포 정점" if vv >= 40 else "높은 변동성" if vv >= 28
-             else "안정" if vv <= 17 else "보통")
+    vzone = (("공포 정점" if vv >= 40 else "높은 변동성" if vv >= 28
+              else "안정" if vv <= 17 else "보통") if ko else
+             ("panic peak" if vv >= 40 else "high volatility" if vv >= 28
+              else "calm" if vv <= 17 else "normal"))
     if vv >= 40 and vd <= 0:
-        v_msg = f"현재 {vv:.0f}, 3개월간 {fmt(vm, 0)} 급등했으나 최근 5일은 {fmt(vd, 0)}로 꺾여 공포가 정점을 지나는 신호입니다."
+        v_msg = (f"현재 {vv:.0f}, 3개월간 {fmt(vm, 0)} 급등했으나 최근 5일은 {fmt(vd, 0)}로 꺾여 공포가 정점을 지나는 신호입니다." if ko else
+                 f"Now {vv:.0f}, up {fmt(vm, 0)} in 3 months but {fmt(vd, 0)} over the last 5 days — fear looks past its peak.")
     elif vv <= 17:
-        v_msg = f"현재 {vv:.0f}로 변동성이 낮게 유지되어 시장이 안정적입니다."
+        v_msg = (f"현재 {vv:.0f}로 변동성이 낮게 유지되어 시장이 안정적입니다." if ko else
+                 f"Now {vv:.0f}; volatility stays low and the market is stable.")
     elif vd > 0 and vv >= 28:
-        v_msg = f"현재 {vv:.0f}, 변동성이 계속 확대되고 있어 위험 구간입니다."
+        v_msg = (f"현재 {vv:.0f}, 변동성이 계속 확대되고 있어 위험 구간입니다." if ko else
+                 f"Now {vv:.0f}; volatility keeps expanding — a risk zone.")
     else:
-        v_msg = f"현재 {vv:.0f}, {vzone} 구간입니다. 5일 {fmt(vd, 0)} · 3개월 {fmt(vm, 0)} 변화로 큰 방향성은 없습니다."
+        v_msg = (f"현재 {vv:.0f}, {vzone} 구간입니다. 5일 {fmt(vd, 0)} · 3개월 {fmt(vm, 0)} 변화로 큰 방향성은 없습니다." if ko else
+                 f"Now {vv:.0f}, in the {vzone} zone. 5-day {fmt(vd, 0)} · 3-month {fmt(vm, 0)} — no big direction.")
 
     # P5 180일선
     dist, slope = d["maDist"], d["maSlope"]
     if dist <= 0:
-        ma_msg = (f"SPY가 180일선보다 {abs(dist):.1f}% 아래에 있습니다. "
-                  + ("선 자체는 상승을 유지하고 있어 되돌림 매수 구간으로 해석됩니다."
-                     if slope > 0 else "선의 기울기도 꺾여 있어 신중한 분할 접근이 필요합니다."))
+        ma_msg = ((f"SPY가 180일선보다 {abs(dist):.1f}% 아래에 있습니다. "
+                   + ("선 자체는 상승을 유지하고 있어 되돌림 매수 구간으로 해석됩니다."
+                      if slope > 0 else "선의 기울기도 꺾여 있어 신중한 분할 접근이 필요합니다.")) if ko else
+                  (f"SPY is {abs(dist):.1f}% below its 180-day line. "
+                   + ("The line itself still rises, so this reads as a pullback buying zone."
+                      if slope > 0 else "The line's slope has also turned down — approach cautiously in installments.")))
     else:
-        ma_msg = (f"SPY가 180일선보다 {dist:.1f}% 위에 있으며, "
-                  + ("선의 기울기도 상승을 유지하고 있습니다." if slope > 0
-                     else "선의 기울기는 눕기 시작했습니다."))
+        ma_msg = ((f"SPY가 180일선보다 {dist:.1f}% 위에 있으며, "
+                   + ("선의 기울기도 상승을 유지하고 있습니다." if slope > 0
+                      else "선의 기울기는 눕기 시작했습니다.")) if ko else
+                  (f"SPY is {dist:.1f}% above its 180-day line, "
+                   + ("and the line keeps rising." if slope > 0
+                      else "but the line has started to flatten.")))
 
     # P6 장마감 매수
     st, n20 = d["eod"], d["eod20"]
     if st >= 3:
-        e_msg = f"마감 30분 순매수가 {st}일째 이어지고 있습니다. 최근 20거래일 중 {n20}일 관측되어 기관성 매집 신호에 해당합니다."
+        e_msg = (f"마감 30분 순매수가 {st}일째 이어지고 있습니다. 최근 20거래일 중 {n20}일 관측되어 기관성 매집 신호에 해당합니다." if ko else
+                 f"Net buying in the last 30 minutes has run {st} straight days — seen on {n20} of the last 20 sessions, an institutional accumulation signal.")
     elif st > 0:
-        e_msg = f"마감 30분 순매수가 {st}일째입니다. 최근 20거래일 중 {n20}일 관측되어 아직 추세로 보기는 이릅니다."
+        e_msg = (f"마감 30분 순매수가 {st}일째입니다. 최근 20거래일 중 {n20}일 관측되어 아직 추세로 보기는 이릅니다." if ko else
+                 f"Late-30-minute net buying for {st} day(s); {n20} of the last 20 sessions — too early to call a trend.")
     else:
-        e_msg = f"오늘 기준 연속 매수는 없습니다. 최근 20거래일 중 {n20}일 관측됐습니다."
+        e_msg = (f"오늘 기준 연속 매수는 없습니다. 최근 20거래일 중 {n20}일 관측됐습니다." if ko else
+                 f"No buying streak as of today; observed on {n20} of the last 20 sessions.")
 
     # P7 주도주
     ld = d["leaders"]
     if ld:
-        l_msg = f"{len(ld)}종목이 조건을 통과했습니다: " + " · ".join(ld[:8]) + "."
+        l_msg = ((f"{len(ld)}종목이 조건을 통과했습니다: " if ko else
+                  f"{len(ld)} names passed the screen: ") + " · ".join(ld[:8]) + ".")
         if below and len(ld) >= 5:
-            l_msg += " 하락장에서 후보군이 두터워 차기 주도군이 형성되는 신호입니다."
+            l_msg += (" 하락장에서 후보군이 두터워 차기 주도군이 형성되는 신호입니다." if ko else
+                      " A deep candidate pool in a downturn — a sign the next leadership group is forming.")
     else:
-        l_msg = "현재 조건을 통과한 종목이 없습니다."
+        l_msg = "현재 조건을 통과한 종목이 없습니다." if ko else "No names currently pass the screen."
 
     # P9 BTC
     b_d, b_w, b_m = d["btcMom"], w["btcMom"], m["btcMom"]
-    b_line = f"7일 {fmt(b_d)}% · 4주 {fmt(b_w)}% · 3개월 {fmt(b_m)}%."
+    b_line = ((f"7일 {fmt(b_d)}% · 4주 {fmt(b_w)}% · 3개월 {fmt(b_m)}%.") if ko else
+              (f"7d {fmt(b_d)}% · 4w {fmt(b_w)}% · 3m {fmt(b_m)}%."))
     if below and d["btcTurned"]:
-        b_msg = ("중기 조정 속에서 단기 반등이 시작되어 주식시장 선행 신호로 해석됩니다."
-                 if b_m < 0 else "전 구간이 상승으로 돌아서 위험선호 회복 신호입니다.")
+        b_msg = (("중기 조정 속에서 단기 반등이 시작되어 주식시장 선행 신호로 해석됩니다."
+                  if b_m < 0 else "전 구간이 상승으로 돌아서 위험선호 회복 신호입니다.") if ko else
+                 ("A short-term rebound has begun within the mid-term correction — read as a leading signal for stocks."
+                  if b_m < 0 else "All horizons have turned up — risk appetite is recovering."))
     elif below:
-        b_msg = "아직 선행 반등 신호는 나타나지 않았습니다."
+        b_msg = ("아직 선행 반등 신호는 나타나지 않았습니다." if ko else
+                 "No leading rebound signal yet.")
     elif b_d > 0 and b_m > 0:
-        b_msg = "전 구간 상승으로 위험선호가 유지되고 있습니다."
+        b_msg = ("전 구간 상승으로 위험선호가 유지되고 있습니다." if ko else
+                 "Up across horizons — risk appetite holds.")
     elif b_d < -3:
-        b_msg = "BTC가 먼저 밀리기 시작해 경계 신호입니다."
+        b_msg = ("BTC가 먼저 밀리기 시작해 경계 신호입니다." if ko else
+                 "BTC is slipping first — a caution signal.")
     else:
-        b_msg = "큰 방향성 없이 횡보하고 있습니다."
+        b_msg = "큰 방향성 없이 횡보하고 있습니다." if ko else "Drifting sideways with no clear direction."
 
+    NM = SIGNAL_NAMES[lang]
     return {
-        "fang": {"num": 1, "name": "FANG 상대강도", "metric": f"RS {fmt(f_d)}%p",
+        "fang": {"num": 1, "name": NM["fang"], "metric": f"RS {fmt(f_d)}%p",
                  "sub": f_line + " " + f_msg,
-                 "rule": "하락장에서는 상대수익 +1.5%p 이상이면 바닥 신호, −1.5%p 이하이면 하락 주도로 판정합니다. 상승장에서 −2%p 이하로 뒤처지면 고점 경고입니다."},
-        "macd": {"num": 2, "name": "V-바닥 / MACD 반전", "metric": phase(d),
+                 "rule": ("하락장에서는 상대수익 +1.5%p 이상이면 바닥 신호, −1.5%p 이하이면 하락 주도로 판정합니다. 상승장에서 −2%p 이하로 뒤처지면 고점 경고입니다." if ko else
+                          "In a downturn, relative return ≥ +1.5%p is a bottoming signal and ≤ −1.5%p means FANG leads the decline. In an uptrend, lagging by ≤ −2%p is a topping warning.")},
+        "macd": {"num": 2, "name": NM["macd"], "metric": phase(d),
                  "sub": c_line + " " + c_msg,
-                 "rule": "MACD(12,26,9) 히스토그램이 저점 이후 3봉(주간·월간은 2봉) 연속 개선되면 바닥 신호, 고점 이후 같은 길이로 약화되면 경고로 판정합니다."},
-        "fg": {"num": 3, "name": "CNN Fear & Greed", "metric": fg_txt,
+                 "rule": ("MACD(12,26,9) 히스토그램이 저점 이후 3봉(주간·월간은 2봉) 연속 개선되면 바닥 신호, 고점 이후 같은 길이로 약화되면 경고로 판정합니다." if ko else
+                          "A MACD(12,26,9) histogram improving 3 consecutive bars off a low (2 for weekly/monthly) is a bottoming signal; weakening the same length off a high is a warning.")},
+        "fg": {"num": 3, "name": NM["fg"], "metric": fg_txt,
                "sub": fg_msg,
-               "rule": "지수가 10 이하이면 바닥 근접(역발상 매수 구간), 25 이하이면 공포, 75 이상이면 과열 경계로 판정합니다."},
-        "vix": {"num": 4, "name": "불확실성 정점", "metric": f"VIX {vv:.0f} ({fmt(vd, 0)})",
+               "rule": ("지수가 10 이하이면 바닥 근접(역발상 매수 구간), 25 이하이면 공포, 75 이상이면 과열 경계로 판정합니다." if ko else
+                        "Index ≤ 10 means near a bottom (contrarian buy zone), ≤ 25 fear, ≥ 75 overheating caution.")},
+        "vix": {"num": 4, "name": NM["vix"], "metric": f"VIX {vv:.0f} ({fmt(vd, 0)})",
                 "sub": v_msg,
-                "rule": "VIX가 40 이상에서 꺾이면 전환 신호, 28 이상이면 위험, 17 이하이면 안정으로 판정합니다. 추후 뉴스 심리 분석으로 대체할 예정입니다."},
-        "ma": {"num": 5, "name": "SPY vs 180일선", "metric": f"180D {fmt(dist)}%",
+                "rule": ("VIX가 40 이상에서 꺾이면 전환 신호, 28 이상이면 위험, 17 이하이면 안정으로 판정합니다. 추후 뉴스 심리 분석으로 대체할 예정입니다." if ko else
+                         "VIX rolling over from above 40 is a turning signal; ≥ 28 is risky, ≤ 17 stable. To be replaced by news-sentiment analysis later.")},
+        "ma": {"num": 5, "name": NM["ma"], "metric": f"180D {fmt(dist)}%",
                "sub": ma_msg,
-               "rule": "SPY가 180일선 이하로 내려오면 우량주 분할매수 구간, +3%를 넘으면 정상 상승 추세로 판정합니다."},
-        "eod": {"num": 6, "name": "장마감 기관 매수", "metric": f"{st}일 연속",
+               "rule": ("SPY가 180일선 이하로 내려오면 우량주 분할매수 구간, +3%를 넘으면 정상 상승 추세로 판정합니다." if ko else
+                        "SPY below the 180-day line marks a zone to accumulate quality names in installments; above +3% is a normal uptrend.")},
+        "eod": {"num": 6, "name": NM["eod"], "metric": (f"{st}일 연속" if ko else f"{st}-day streak"),
                 "sub": e_msg,
-                "rule": "마감 30분봉 수익률이 +0.1%를 넘는 날이 3일 이상 이어지면 기관성 매집 신호로 판정합니다."},
-        "lead": {"num": 7, "name": "차기 주도주 후보", "metric": f"{len(ld)}종목 포착",
+                "rule": ("마감 30분봉 수익률이 +0.1%를 넘는 날이 3일 이상 이어지면 기관성 매집 신호로 판정합니다." if ko else
+                         "Three or more consecutive days with the final 30-minute bar returning over +0.1% counts as institutional accumulation.")},
+        "lead": {"num": 7, "name": NM["lead"], "metric": (f"{len(ld)}종목 포착" if ko else f"{len(ld)} names flagged"),
                  "sub": l_msg,
-                 "rule": "하락장에서는 낙폭이 SPY의 60% 이내로 방어되고 최근 5일 수익률이 플러스인 종목을, 상승장에서는 20일 상대수익이 +3%p를 넘는 종목을 후보로 선정합니다."},
-        "btc": {"num": 9, "name": "BTC 선행 지표", "metric": f"{fmt(b_d)}% (7일)",
+                 "rule": ("하락장에서는 낙폭이 SPY의 60% 이내로 방어되고 최근 5일 수익률이 플러스인 종목을, 상승장에서는 20일 상대수익이 +3%p를 넘는 종목을 후보로 선정합니다." if ko else
+                          "In a downturn: names whose drawdown stays within 60% of SPY's and whose 5-day return is positive. In an uptrend: names with 20-day relative return over +3%p.")},
+        "btc": {"num": 9, "name": NM["btc"], "metric": f"{fmt(b_d)}% " + ("(7일)" if ko else "(7d)"),
                 "sub": b_line + " " + b_msg,
-                "rule": "하락장에서 BTC 모멘텀이 +2% 이상이고 2일 연속 상승하면 주식시장 선행 반등 신호로 판정합니다."},
+                "rule": ("하락장에서 BTC 모멘텀이 +2% 이상이고 2일 연속 상승하면 주식시장 선행 반등 신호로 판정합니다." if ko else
+                         "In a downturn, BTC momentum ≥ +2% with 2 consecutive up days is a leading rebound signal for stocks.")},
     }
 
 
@@ -950,7 +1052,18 @@ _CSS = r"""
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans KR',system-ui,sans-serif;font-size:14px}
 .mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
-.wrap{max-width:1000px;margin:0 auto;padding:20px 16px 48px;display:flex;flex-direction:column;gap:20px}
+.wrap{position:relative;max-width:1000px;margin:0 auto;padding:20px 16px 48px}
+/* 언어 토글: 숨긴 체크박스 + :checked (JS 없이 동작 — Jupyter 뷰어 호환) */
+.lang-sw{position:absolute;left:-9999px}
+.lang{display:flex;flex-direction:column;gap:20px}
+.lang-en{display:none}
+.lang-sw:checked ~ .wrap .lang-ko{display:none}
+.lang-sw:checked ~ .wrap .lang-en{display:flex}
+.lang-btn{position:absolute;top:22px;right:16px;z-index:5;display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;cursor:pointer;font-size:12px;user-select:none;background:var(--card)}
+.lang-btn .opt{padding:5px 12px;color:var(--mut)}
+.lang-btn .opt-ko{background:#1e2a40;color:var(--tx);font-weight:600}
+.lang-sw:checked ~ .wrap .lang-btn .opt-ko{background:transparent;color:var(--mut);font-weight:400}
+.lang-sw:checked ~ .wrap .lang-btn .opt-en{background:#1e2a40;color:var(--tx);font-weight:600}
 .eyebrow{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
 h1{font-size:24px;margin-top:4px}
 .sub{color:var(--mut);margin-top:4px}
@@ -1065,8 +1178,9 @@ def _score_ind(T):
             + '<span class="ind-mk" style="left:' + f"{pct:.1f}" + '%"></span></span>')
 
 
-def _overall_panel(tfs_all, combo, digest):
+def _overall_panel(tfs_all, combo, digest, lang="ko"):
     """오늘의 종합 판정: 일간 점수 + 월간·주간·일간 소형 점수 바 + 국면·권장 행동."""
+    ko = lang == "ko"
     T = tfs_all["daily"]
     c = ST[T["overall"]]["color"]
     dg = ''
@@ -1075,26 +1189,30 @@ def _overall_panel(tfs_all, combo, digest):
                        + ST[x["state"]]["color"] + '">P' + str(x["num"]) + '</span>'
                        + '<span class="dnm">(' + _esc(x.get("name", "")) + ')</span>'
                        + '<span class="dtx">' + _esc(x["text"]) + '</span></div>' for x in digest)
-        dg = ('<div class="eyebrow mono" style="margin-top:18px">오늘의 신호 한 줄 요약</div>'
+        dg = ('<div class="eyebrow mono" style="margin-top:18px">'
+              + ('오늘의 신호 한 줄 요약' if ko else "Today's Signals in Plain Words") + '</div>'
               + rows)
     tone_c = TONE_COLORS.get(combo["tone"], "#8a94a8")
     groups = ''
     for t in ("monthly", "weekly", "daily"):
         groups += ('<span class="sind' + (' on' if t == "daily" else '') + '">'
-                   + '<span class="sind-lb mono">' + TF_LABEL[t] + '</span>'
+                   + '<span class="sind-lb mono">' + TF_LABEL[lang][t] + '</span>'
                    + _score_ind(tfs_all[t]) + '</span>')
     return ('<div class="panel ov"><div class="row">'
-            + '<div class="ov-left"><span class="eyebrow mono">오늘의 종합 판정</span></div>'
+            + '<div class="ov-left"><span class="eyebrow mono">'
+            + ('오늘의 종합 판정' if ko else "Today's Overall Verdict") + '</span></div>'
             + '<div class="ov-score"><span class="score mono" style="color:' + c + '">'
             + fmt(T["score"] * 100) + '</span>'
             + '<span class="note mono" style="margin-top:0">/ ±100</span></div></div>'
             + '<div class="sind-row">' + groups + '</div>'
             + '<div class="verdict" style="color:' + tone_c + '">' + _esc(combo["name"]) + '</div>'
-            + '<div class="v-act">권장 행동: ' + _esc(combo["action"]) + '</div>'
+            + '<div class="v-act">' + ('권장 행동: ' if ko else 'Suggested action: ')
+            + _esc(combo["action"]) + '</div>'
             + dg + '</div>')
 
 
-def _card(sig):
+def _card(sig, lang="ko"):
+    ko = lang == "ko"
     c = ST[sig["state"]]["color"]
     return ('<div class="card"><div class="hd">'
             + '<div><div class="pn mono"><span style="color:' + c
@@ -1102,97 +1220,152 @@ def _card(sig):
             + '<div class="nm">' + _esc(sig["name"]) + '</div></div>'
             + _ind(sig["state"], True) + '</div>'
             + '<div><div class="mv mono">' + _esc(sig["metric"]) + '</div>'
-            + '<div class="ms">평가: ' + _esc(sig["sub"]) + '</div></div>'
-            + '<div class="rule">기준: ' + _esc(sig["rule"]) + '</div></div>')
+            + '<div class="ms">' + ('평가: ' if ko else 'Assessment: ') + _esc(sig["sub"]) + '</div></div>'
+            + '<div class="rule">' + ('기준: ' if ko else 'Rule: ') + _esc(sig["rule"]) + '</div></div>')
 
 
-def _cal_panel(payload):
+def _cal_panel(payload, lang="ko"):
     """캘린더 & 수급 패널: 옵션 만기일 / 윈도우 드레싱 / 숏 비중 (점수 미반영 참고 정보)."""
     cal = payload.get("calendar")
     if not cal:
         return ''
+    ko = lang == "ko"
     op, opn, wd = cal["opex"], cal["opex_next"], cal["wd"]
 
+    def fd(x):
+        return x["date"] + ' (' + DOW[lang][x["dow"]] + ')'
+
     def dd(n, hot=False):
-        t = "오늘" if n == 0 else (f"D-{n}" if n > 0 else f"{-n}일 지남")
+        if n == 0:
+            t = "오늘" if ko else "Today"
+        elif n > 0:
+            t = f"D-{n}"
+        else:
+            t = f"{-n}일 지남" if ko else f"{-n}d ago"
         return '<span class="dday' + (' hot' if hot else '') + ' mono">' + t + '</span>'
 
-    tw = ' · <b>트리플 위칭</b>(지수 선물·옵션 동시 만기, 변동성 확대 주의)'
+    tw = (' · <b>트리플 위칭</b>(지수 선물·옵션 동시 만기, 변동성 확대 주의)' if ko else
+          ' · <b>Triple witching</b> (index futures & options expire together — expect volatility)')
     if op["passed"]:
-        opex_html = ('이번 달 만기(' + op["date"] + ')는 지났습니다 → 다음 만기 <b>'
-                     + opn["date"] + '</b>' + dd(opn["dday"], opn["dday"] <= 5)
+        opex_html = ((('이번 달 만기(' + fd(op) + ')는 지났습니다 → 다음 만기 <b>') if ko else
+                      ("This month's expiration (" + fd(op) + ") has passed → next <b>"))
+                     + fd(opn) + '</b>' + dd(opn["dday"], opn["dday"] <= 5)
                      + (tw if opn["triple"] else ''))
     else:
-        opex_html = ('<b>' + op["date"] + '</b>' + dd(op["dday"], op["dday"] <= 5)
+        opex_html = ('<b>' + fd(op) + '</b>' + dd(op["dday"], op["dday"] <= 5)
                      + (tw if op["triple"] else '')
-                     + ' · 다음 달: ' + opn["date"])
-    wd_html = ('<b>' + wd["start"] + ' ~ ' + wd["end"] + '</b> (월말 마지막 4거래일)'
+                     + (' · 다음 달: ' if ko else ' · Next month: ') + fd(opn))
+    wd_html = ('<b>' + fd(wd["start"]) + ' ~ ' + fd(wd["end"]) + '</b> '
+               + ('(월말 마지막 4거래일)' if ko else '(last 4 trading days of the month)')
                + (dd(0) if wd["active"] else dd(wd["dday"], 0 < wd["dday"] <= 3))
-               + (' · <b>분기말</b>이라 리밸런싱 효과가 큰 달입니다' if wd["quarter"]
-                  else ' · 월말 리밸런싱 수준'))
+               + ((' · <b>분기말</b>이라 리밸런싱 효과가 큰 달입니다' if wd["quarter"]
+                   else ' · 월말 리밸런싱 수준') if ko else
+                  (' · <b>Quarter-end</b> — rebalancing effects run stronger this month' if wd["quarter"]
+                   else ' · Ordinary month-end rebalancing')))
 
     rows = ''
     for s in payload.get("shorts") or []:
         pct = f'{s["pct"]:.1f}%' if s.get("pct") is not None else 'N/A'
-        dtc = f'{s["dtc"]:.1f}일' if s.get("dtc") is not None else 'N/A'
+        dtc = ((f'{s["dtc"]:.1f}일' if ko else f'{s["dtc"]:.1f}d')
+               if s.get("dtc") is not None else 'N/A')
         chg = (fmt(s["chg"]) + '%') if s.get("chg") is not None else 'N/A'
         hot = s.get("pct") is not None and s["pct"] >= 10
-        rows += ('<tr><td>' + _esc(s["name"])
+        nm = s["name"] if ko else s.get("name_en") or s["name"]
+        rows += ('<tr><td>' + _esc(nm)
                  + ' <span class="mono" style="color:var(--dim)">' + _esc(s["ticker"]) + '</span></td>'
                  + '<td class="mono"' + (' style="color:#fb923c;font-weight:600"' if hot else '') + '>' + pct + '</td>'
                  + '<td class="mono">' + dtc + '</td>'
                  + '<td class="mono">' + chg + '</td>'
                  + '<td class="mono" style="color:var(--dim)">' + _esc(s.get("asof") or "") + '</td></tr>')
-    tbl = (('<div class="stblwrap"><table class="stbl">'
-            '<tr><th>종목</th><th>숏 비중(유동주식 대비)</th><th>숏 커버 소요일</th>'
-            '<th>숏 주식수 전월 대비</th><th>집계 기준일</th></tr>'
-            + rows + '</table></div>') if rows
-           else '<div class="note">숏 비중 조회 실패 — 네트워크 확인 후 다시 실행하세요.</div>')
+    th = (('<tr><th>종목</th><th>숏 비중(유동주식 대비)</th><th>숏 커버 소요일</th>'
+           '<th>숏 주식수 전월 대비</th><th>집계 기준일</th></tr>') if ko else
+          ('<tr><th>Name</th><th>Short % of float</th><th>Days to cover</th>'
+           '<th>Shares short vs prior month</th><th>As of</th></tr>'))
+    tbl = (('<div class="stblwrap"><table class="stbl">' + th + rows + '</table></div>') if rows
+           else '<div class="note">'
+                + ('숏 비중 조회 실패 — 네트워크 확인 후 다시 실행하세요.' if ko else
+                   'Short-interest lookup failed — check the network and rerun.') + '</div>')
 
-    return ('<div class="panel"><div class="eyebrow mono">캘린더 &amp; 수급 체크 (참고 정보 · 종합점수 미반영)</div>'
-            + '<div class="crow"><span class="clb">옵션 만기일 (OPEX)</span><span class="cvl">' + opex_html + '</span></div>'
-            + '<div class="crow"><span class="clb">윈도우 드레싱 예상</span><span class="cvl">' + wd_html + '</span></div>'
+    return ('<div class="panel"><div class="eyebrow mono">'
+            + ('캘린더 &amp; 수급 체크 (참고 정보 · 종합점수 미반영)' if ko else
+               'Calendar &amp; Positioning Check (reference only · not scored)') + '</div>'
+            + '<div class="crow"><span class="clb">'
+            + ('옵션 만기일 (OPEX)' if ko else 'Options Expiration (OPEX)')
+            + '</span><span class="cvl">' + opex_html + '</span></div>'
+            + '<div class="crow"><span class="clb">'
+            + ('윈도우 드레싱 예상' if ko else 'Window Dressing Window')
+            + '</span><span class="cvl">' + wd_html + '</span></div>'
             + tbl
-            + '<div class="note">숏 비중은 거래소 공식 집계(월 2회 발표, 약 2주 지연) 기준이라 실시간이 아닙니다. '
-            + '숏 비중 10% 이상은 주황색으로 표시하며, 숏 커버 소요일(Days to Cover)이 길수록 숏스퀴즈 가능성이 커집니다. '
-            + '만기일·월말 날짜는 주말만 제외한 계산이라 미국 휴장일과 겹치면 실제로는 직전 거래일로 이동합니다. '
-            + 'SpaceX는 비상장 기업이라 숏 데이터가 존재하지 않아, SpaceX 지분을 보유한 상장 펀드 DXYZ(Destiny Tech100)로 대체 표시합니다.</div></div>')
+            + '<div class="note">'
+            + ('숏 비중은 거래소 공식 집계(월 2회 발표, 약 2주 지연) 기준이라 실시간이 아닙니다. '
+               '숏 비중 10% 이상은 주황색으로 표시하며, 숏 커버 소요일(Days to Cover)이 길수록 숏스퀴즈 가능성이 커집니다. '
+               '만기일·월말 날짜는 주말만 제외한 계산이라 미국 휴장일과 겹치면 실제로는 직전 거래일로 이동합니다. '
+               'SpaceX는 비상장 기업이라 숏 데이터가 존재하지 않아, SpaceX 지분을 보유한 상장 펀드 DXYZ(Destiny Tech100)로 대체 표시합니다.' if ko else
+               'Short interest comes from the exchanges\' official tally (published twice a month, ~2-week lag) — not real-time. '
+               'Short % of float at 10% or more is shown in orange; the longer the days-to-cover, the higher the squeeze potential. '
+               'Expiration and month-end dates exclude weekends only, so a date falling on a US market holiday actually moves to the prior trading day. '
+               'SpaceX is private and has no short data, so DXYZ (Destiny Tech100), a listed fund holding SpaceX, is shown as a proxy.')
+            + '</div></div>')
 
 
-def render_html(payload):
+def _render_body(payload, lang):
+    """한 언어분의 본문(헤더~푸터). render_html이 두 언어를 모두 담아 토글한다."""
+    ko = lang == "ko"
     a = payload["asof"]
+    tx = payload["texts"][lang]
+
+    def fdow(i):
+        return DOW[lang][i]
+
     stt = a.get("status", "current")
     if stt == "weekend":
-        asof_tag = ('<span class="tag warn">오늘 ' + a["today"] + ' (' + a["today_dow"]
-                    + ')은 주말 휴장 → 직전 영업일 종가 기준</span>')
+        asof_tag = ('<span class="tag warn">오늘 ' + a["today"] + ' (' + fdow(a["today_dow"])
+                    + ')은 주말 휴장 → 직전 영업일 종가 기준</span>') if ko else (
+            '<span class="tag warn">Today ' + a["today"] + ' (' + fdow(a["today_dow"])
+            + ') is a weekend — based on the prior business day\'s close</span>')
     elif stt == "pre_open":
-        asof_tag = '<span class="tag warn">오늘 개장 전 → 직전 영업일 종가 기준</span>'
+        asof_tag = ('<span class="tag warn">오늘 개장 전 → 직전 영업일 종가 기준</span>' if ko else
+                    '<span class="tag warn">Before today\'s open — based on the prior business day\'s close</span>')
     elif stt == "holiday":
-        asof_tag = ('<span class="tag warn">오늘 ' + a["today"] + ' (' + a["today_dow"]
-                    + ')은 휴장일 → 직전 영업일 종가 기준</span>')
+        # 주의(ko): '휴장일 →' 문자열은 서버 휴장 판정 grep이 사용
+        asof_tag = ('<span class="tag warn">오늘 ' + a["today"] + ' (' + fdow(a["today_dow"])
+                    + ')은 휴장일 → 직전 영업일 종가 기준</span>') if ko else (
+            '<span class="tag warn">Today ' + a["today"] + ' (' + fdow(a["today_dow"])
+            + ') is a market holiday — based on the prior business day\'s close</span>')
     elif stt == "intraday":
-        asof_tag = '<span class="tag warn">장중 실행 → 오늘 데이터는 미완성 장중 가격 (종가 아님)</span>'
+        asof_tag = ('<span class="tag warn">장중 실행 → 오늘 데이터는 미완성 장중 가격 (종가 아님)</span>' if ko else
+                    '<span class="tag warn">Generated intraday — today\'s data is an incomplete intraday price (not the close)</span>')
     elif stt == "stale":
-        # 주의: 이 문구에 '휴장일 →'이 들어가면 안 됨 (서버 휴장 판정 grep과 충돌)
-        asof_tag = '<span class="tag warn">데이터 지연 → 직전 영업일 종가 기준</span>'
+        # 주의(ko): 이 문구에 '휴장일 →'이 들어가면 안 됨 (서버 휴장 판정 grep과 충돌)
+        asof_tag = ('<span class="tag warn">데이터 지연 → 직전 영업일 종가 기준</span>' if ko else
+                    '<span class="tag warn">Data delayed — based on the prior business day\'s close</span>')
     else:
         asof_tag = ''  # 마감 후 실행: 오늘자 확정 종가가 반영된 정상 상태
-    mode_tag = '<span class="tag mock">모의 데이터</span>' if payload["mode"] == "demo" else ''
+    mode_tag = ('<span class="tag mock">' + ('모의 데이터' if ko else 'Mock data') + '</span>'
+                if payload["mode"] == "demo" else '')
 
-    head = ('<header><div class="eyebrow mono">Morning Brief · v2.5 · '
+    head = ('<header><div class="eyebrow mono">Morning Brief · v2.6 · '
             + ('Mock' if payload["mode"] == "demo" else 'Live') + ' Data</div>'
             + "<h1>Jaeyoung Cho's Morning Brief</h1>"
-            + '<div class="sub">구독자를 위한 데일리 시장 브리핑 · P1~P9 매매 원칙 기반</div>'
-            + '<div class="asof"><span class="tag">기준일 <b>' + a["equity"] + ' (' + a["equity_dow"] + ')</b> '
-            + ('장중' if stt == "intraday" else '종가') + '</span>'
+            + '<div class="sub">'
+            + ('구독자를 위한 데일리 시장 브리핑 · P1~P9 매매 원칙 기반' if ko else
+               'A daily market brief for subscribers · based on trading principles P1–P9') + '</div>'
+            + '<div class="asof"><span class="tag">'
+            + ('기준일 ' if ko else 'As of ') + '<b>' + a["equity"] + ' (' + fdow(a["equity_dow"]) + ')</b> '
+            + (('장중' if stt == "intraday" else '종가') if ko else
+               ('intraday' if stt == "intraday" else 'close')) + '</span>'
             + asof_tag
-            + '<span class="tag">BTC 기준 <b>' + a["btc"] + ' (' + a["btc_dow"] + ')</b> · 24시간 거래라 주말·휴일에도 최신</span>'
-            + mode_tag + '</div></header>')
+            + '<span class="tag">' + ('BTC 기준 ' if ko else 'BTC as of ')
+            + '<b>' + a["btc"] + ' (' + fdow(a["btc_dow"]) + ')</b> · '
+            + ('24시간 거래라 주말·휴일에도 최신' if ko else 'trades 24/7, so current even on weekends/holidays')
+            + '</span>' + mode_tag + '</div></header>')
 
-    panel = _overall_panel(payload["tfs"], payload["combo"], payload.get("digest") or [])
+    panel = _overall_panel(payload["tfs"], tx["combo"], tx.get("digest") or [], lang)
 
-    grid = ('<div><div class="eyebrow mono" style="margin-bottom:8px">개별 신호 상세 (참고 자료) · 평가는 주간·월간 흐름까지 반영</div>'
-            + '<div class="grid">' + ''.join(_card(s) for s in payload["signals"]) + '</div></div>')
+    grid = ('<div><div class="eyebrow mono" style="margin-bottom:8px">'
+            + ('개별 신호 상세 (참고 자료) · 평가는 주간·월간 흐름까지 반영' if ko else
+               'Signal Details (reference) · assessments reflect weekly & monthly flows too') + '</div>'
+            + '<div class="grid">' + ''.join(_card(s, lang) for s in tx["signals"]) + '</div></div>')
 
     nrows = ''
     for i, nw in enumerate(payload.get("news") or [], 1):
@@ -1203,22 +1376,46 @@ def render_html(payload):
         nrows += ('<div class="nrow"><span class="nno mono">' + str(i) + '</span>'
                   + '<span class="ntt">' + ttl + '</span>'
                   + '<span class="nmeta mono">' + meta + '</span></div>')
-    news = ('<div class="panel"><div class="eyebrow mono">P8 · 주요 시장 뉴스 Top 5</div>'
-            + (nrows if nrows else '<div class="note">뉴스 조회 실패 — 네트워크 확인 후 다시 실행</div>')
-            + '<div class="note">기준: 선거·전쟁·미중 갈등 등 대형 이벤트는 과거 유사 패턴을 따르는 경우가 많습니다(P8). 해석은 구독자 판단이며 점수에는 포함하지 않습니다.</div></div>')
+    news = ('<div class="panel"><div class="eyebrow mono">'
+            + ('P8 · 주요 시장 뉴스 Top 5' if ko else 'P8 · Top 5 Market News') + '</div>'
+            + (nrows if nrows else '<div class="note">'
+               + ('뉴스 조회 실패 — 네트워크 확인 후 다시 실행' if ko else
+                  'News lookup failed — check the network and rerun') + '</div>')
+            + '<div class="note">'
+            + ('기준: 선거·전쟁·미중 갈등 등 대형 이벤트는 과거 유사 패턴을 따르는 경우가 많습니다(P8). 해석은 구독자 판단이며 점수에는 포함하지 않습니다.' if ko else
+               'Rule: big events — elections, wars, US-China tension — often follow past patterns (P8). Interpretation is up to the reader and is not scored.')
+            + '</div></div>')
 
-    foot = ('<footer class="panel">'
-            + '<div class="foot">종합점수(-100~+100) = Σ(신호 상태점수 × 가중치) ÷ Σ가중치이며, ±45 밴드와 최근 방향으로 판정합니다. '
-            + '주간·월간 점수는 타임프레임 연동 신호(P1·P2·P4·P9)로 계산하며, 세 주기의 시차 자체가 정보입니다. '
-            + '임계값과 가중치는 자리표시자로, 실데이터 백테스트로 보정이 필요합니다. '
-            + '국면 문구와 권장 행동은 combo_advice()에서 수정합니다. '
-            + 'CNN Fear &amp; Greed 조회 실패 시 해당 신호는 일간 점수에서 자동 제외됩니다. '
-            + '생성 시각: ' + payload["generated"] + '</div></footer>')
+    foot = ('<footer class="panel"><div class="foot">'
+            + ('종합점수(-100~+100) = Σ(신호 상태점수 × 가중치) ÷ Σ가중치이며, ±45 밴드와 최근 방향으로 판정합니다. '
+               '주간·월간 점수는 타임프레임 연동 신호(P1·P2·P4·P9)로 계산하며, 세 주기의 시차 자체가 정보입니다. '
+               '임계값과 가중치는 자리표시자로, 실데이터 백테스트로 보정이 필요합니다. '
+               '국면 문구와 권장 행동은 combo_advice()에서 수정합니다. '
+               'CNN Fear &amp; Greed 조회 실패 시 해당 신호는 일간 점수에서 자동 제외됩니다. '
+               '생성 시각: ' if ko else
+               'Composite score (−100 to +100) = Σ(state score × weight) ÷ Σweights, judged with a ±45 band and the recent direction. '
+               'Weekly/monthly scores use the timeframe-linked signals (P1·P2·P4·P9); the lag between the three horizons is itself information. '
+               'Thresholds and weights are placeholders pending a backtest on real data. '
+               'Regime wording and suggested actions are edited in combo_advice(). '
+               'If the CNN Fear &amp; Greed lookup fails, that signal is dropped from the daily score automatically. '
+               'Generated: ')
+            + payload["generated"] + '</div></footer>')
 
+    return head + panel + _cal_panel(payload, lang) + news + grid + foot
+
+
+def render_html(payload):
+    toggle = '<input type="checkbox" id="lang-sw" class="lang-sw" aria-label="한국어 / English">'
+    btn = ('<label for="lang-sw" class="lang-btn mono">'
+           '<span class="opt opt-ko">한국어</span><span class="opt opt-en">English</span></label>')
     return ('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">'
             + '<meta name="viewport" content="width=device-width, initial-scale=1">'
             + "<title>Jaeyoung Cho's Morning Brief</title><style>" + _CSS + '</style></head><body>'
-            + '<div class="wrap">' + head + panel + _cal_panel(payload) + news + grid + foot + '</div></body></html>')
+            + toggle
+            + '<div class="wrap">' + btn
+            + '<div class="lang lang-ko">' + _render_body(payload, "ko") + '</div>'
+            + '<div class="lang lang-en">' + _render_body(payload, "en") + '</div>'
+            + '</div></body></html>')
 
 
 # ============================================================
@@ -1281,33 +1478,37 @@ def build_payload(demo=False, fg=None):
         trend = 1 if dsc > CONFIG["trend_eps"] else -1 if dsc < -CONFIG["trend_eps"] else 0
         tfs[tf] = {"score": sc_now, "trend": trend, "overall": overall(sc_now, trend)}
         mets[tf], states[tf] = m_now, st_now
-        print(f"[{TF_LABEL[tf]}] 종합 {sc_now*100:+.1f} → {tfs[tf]['overall']}"
+        print(f"[{TF_LABEL['ko'][tf]}] 종합 {sc_now*100:+.1f} → {tfs[tf]['overall']}"
               f"  (방향 {trend:+d}, 상태: " +
               ", ".join(f"{k}:{v}" for k, v in st_now.items()) + ")")
 
-    texts = brief_texts(mets["daily"], mets["weekly"], mets["monthly"])
-    digest = plain_digest(mets["daily"], states["daily"])
-    sigs = [{**texts[k], "id": k, "weight": WEIGHTS[k], "state": states["daily"][k]}
-            for k in states["daily"]]
-
     mo, wk, dy = (tfs[t]["overall"] for t in ("monthly", "weekly", "daily"))
-    cname, caction, ctone = combo_advice(mo, wk, dy)
-    print(f"[통합] 월간 {mo} · 주간 {wk} · 일간 {dy} → {cname}: {caction}")
+    texts = {}
+    for lg in LANGS:  # 한국어·영어 두 벌 생성 → HTML 토글로 전환
+        tx = brief_texts(mets["daily"], mets["weekly"], mets["monthly"], lg)
+        cname, caction, ctone = combo_advice(mo, wk, dy, lg)
+        texts[lg] = {
+            "signals": [{**tx[k], "id": k, "weight": WEIGHTS[k], "state": states["daily"][k]}
+                        for k in states["daily"]],
+            "digest": plain_digest(mets["daily"], states["daily"], lg),
+            "combo": {"mo": mo, "wk": wk, "dy": dy,
+                      "name": cname, "action": caction, "tone": ctone},
+        }
+    ck = texts["ko"]["combo"]
+    print(f"[통합] 월간 {mo} · 주간 {wk} · 일간 {dy} → {ck['name']}: {ck['action']}")
 
     payload = jsonable({
         "mode": data["mode"],
         "news": data.get("news", []),
         "shorts": data.get("shorts", []),
         "calendar": market_calendar(today),
-        "combo": {"mo": mo, "wk": wk, "dy": dy,
-                  "name": cname, "action": caction, "tone": ctone},
         "asof": {
-            "equity": str(eq_asof), "equity_dow": DOW_KR[eq_asof.weekday()],
-            "today": str(today), "today_dow": DOW_KR[today.weekday()],
+            "equity": str(eq_asof), "equity_dow": eq_asof.weekday(),
+            "today": str(today), "today_dow": today.weekday(),
             "status": mkt_status,
-            "btc": str(btc_asof), "btc_dow": DOW_KR[btc_asof.weekday()],
+            "btc": str(btc_asof), "btc_dow": btc_asof.weekday(),
         },
-        "tfs": tfs, "signals": sigs, "digest": digest, "states": ST, "tfLabel": TF_LABEL,
+        "tfs": tfs, "texts": texts, "states": ST,
         "generated": now_et.strftime("%Y-%m-%d %H:%M ET"),
     })
     note = {"current": "",
