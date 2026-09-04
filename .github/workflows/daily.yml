@@ -1,23 +1,24 @@
 name: dashboard-updates
 
-# ── 스케줄 설계 메모 (2026-08-31 개편) ───────────────────────────────
-# GitHub의 cron(schedule)은 "정시 보장"이 아니라 최선 노력(best-effort)이라
-# 수 시간 지연되거나 아예 배달되지 않는 날이 있다. 실제로 8/26~8/31 사이
-# 배달률이 계속 떨어졌고 8/31(월)에는 하루 종일 0건이었다.
-# 대응 두 가지:
-#   1) cron 등록 수를 줄인다 (하루 13회 → 6회). 촘촘한 스케줄은 후순위로 밀린다.
-#      장중 시간별 갱신은 cron 대신 "아침에 시작한 한 번의 실행이 루프를 돌며"
-#      처리한다 → 아침 실행 하나만 도착하면 그날 갱신 전체가 보장된다.
-#   2) 메일은 시각 고정이 아니라 창(window)으로 판정한다. 평일 CT 8:45~13:00에
-#      도착한 첫 실행이 메일을 보내고 .mail_sent 마커로 하루 1회를 보장한다.
-#      → 이벤트가 늦게 도착해도 "누락" 대신 "지연 발송"이 된다.
-# cron은 UTC 고정이라 서머타임을 모름 → 각 줄에 DST 양쪽 후보를 넣고
-# 게이트가 실제 시카고 시각으로 하나만 통과시킨다.
+# ── 스케줄 설계 메모 (2026-09-04 개편: 텍사스(중부) 오전 9시 발송) ──────────
+# GitHub cron은 "정시 보장"이 아니라 최선 노력(best-effort)이라 45분~3시간 지연되거나
+# 아예 배달되지 않는 날이 있다(8/31 하루 0건, 9/1~9/3은 첫 배달이 12:17 CT).
+# 그래서 "한 번의 정확한 예약"에 기대지 않고 아래 3중 구조로 오전 발송을 확보한다.
+#   1) 9시 조금 전(CT 8:47 등)에도 후보를 두고, 9시 전에 도착한 실행은 CT 8:56까지
+#      기다렸다가 빌드 → 메일이 9시 정각에 나가게 한다.
+#   2) 오전 내내(≈8:47~11:51 CT) 재시도 슬롯을 여러 개 두고 먼저 도착한 실행이
+#      발송한다. .mail_sent 마커로 하루 1회만 발송되도록 보장한다.
+#   3) SMTP 자체 실패는 send_mail.py 안에서 3회 재시도한다.
+# 장중 시간별 갱신은 cron이 아니라 그날 첫 실행이 루프로 처리한다(cron 의존 최소화).
+# cron은 UTC 고정이라 서머타임을 모름 → 각 줄에 DST 양쪽 후보를 넣고 게이트가 거른다.
+# 정각(:00)은 전 세계 cron이 몰려 지연이 심하므로 일부러 어중간한 분에 배치한다.
 on:
   schedule:
-    - cron: '50 13,14 * * 1-5'   # 평일 8:50 AM CT — 메일 + 그날의 장중 갱신 루프 시작
-    - cron: '30 16,17 * * 1-5'   # 평일 11:30 AM CT — 아침 실행이 누락된 날의 예비 슬롯
-    - cron: '15 20,21 * * 1-5'   # 평일 3:15 PM CT (16:15 ET) — 마감 후 확정 종가 스냅샷
+    - cron: '47 13,14 * * 1-5'   # CT 8:47/9:47(여름), 7:47/8:47(겨울) — 9시 정각 발송 본 슬롯
+    - cron: '33 14,15 * * 1-5'   # CT 9:33/10:33(여름), 8:33/9:33(겨울) — 재시도
+    - cron: '19 15,16 * * 1-5'   # CT 10:19/11:19(여름), 9:19/10:19(겨울) — 재시도
+    - cron: '51 16,17 * * 1-5'   # CT 11:51/12:51(여름), 10:51/11:51(겨울) — 오전 마지막 재시도
+    - cron: '15 20,21 * * 1-5'   # CT 3:15 PM (16:15 ET) — 마감 후 확정 종가 스냅샷
     - cron: '0 12 * * 0,6'       # 주말 아침 1회 (BTC·뉴스 갱신, 메일 없음)
   workflow_dispatch:
     inputs:
@@ -36,7 +37,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 358          # 장중 루프 최악 ~348분 + 여유. GitHub 작업 상한 360분 이내
+    timeout-minutes: 355          # 9시 대기 + 장중 루프. GitHub 작업 상한 360분 이내
     steps:
       - uses: actions/checkout@v4
 
@@ -49,29 +50,38 @@ jobs:
           TODAY_CT=$(TZ=America/Chicago date +%F)
           MAILED=0
           if [ "$(cat .mail_sent 2>/dev/null)" = "$TODAY_CT" ]; then MAILED=1; fi
-          RUN=false; MAIL=false; LOOP=false
+          RUN=false; MAIL=false; LOOP=false; WAIT=0
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             RUN=true                                          # 수동 실행은 1회성 (루프 없음)
             if [ "${{ inputs.send_mail }}" = "true" ]; then MAIL=true; fi
           elif [ "$DOW" -ge 6 ]; then
-            RUN=true                                          # 주말 갱신
-          elif [ "$CT_NOW" -ge 480 ] && [ "$CT_NOW" -lt 870 ]; then
-            # 평일 CT 8:00~14:29 = 그날의 본 작업(메일 + 장중 루프) 구간
+            RUN=true                                          # 주말 갱신 (메일 없음)
+          elif [ "$CT_NOW" -ge 450 ] && [ "$CT_NOW" -lt 780 ]; then
+            # 평일 CT 7:30~12:59 = 그날의 발송·갱신 담당 구간
             if [ "$MAILED" = "1" ]; then
-              echo "오늘(${TODAY_CT}) 본 작업이 이미 처리됨 → 중복 실행 생략"
+              echo "오늘(${TODAY_CT}) 발송 완료 → 중복 실행 생략"
             else
-              RUN=true; LOOP=true
-              # 메일 창: CT 8:45~12:59. 늦게 도착한 실행도 그날 브리핑을 발송한다.
-              if [ "$CT_NOW" -ge 525 ] && [ "$CT_NOW" -lt 780 ]; then MAIL=true; fi
+              RUN=true; LOOP=true; MAIL=true
+              # 9시 전에 도착했으면 CT 8:56까지 대기 → 빌드(약 3~4분) 후 9시 정각 발송
+              if [ "$CT_NOW" -lt 536 ]; then WAIT=$(( (536 - CT_NOW) * 60 )); fi
             fi
           elif [ "$CT_NOW" -ge 870 ] && [ "$CT_NOW" -lt 1020 ]; then
             RUN=true                                          # CT 14:30~16:59 마감 스냅샷
           fi
+          DEADLINE=$(( $(date +%s) + 20100 ))                 # 이 작업의 절대 종료 기한(335분)
           echo "run=$RUN" >> "$GITHUB_OUTPUT"
           echo "mail=$MAIL" >> "$GITHUB_OUTPUT"
           echo "loop=$LOOP" >> "$GITHUB_OUTPUT"
+          echo "wait=$WAIT" >> "$GITHUB_OUTPUT"
+          echo "deadline=$DEADLINE" >> "$GITHUB_OUTPUT"
           echo "today_ct=$TODAY_CT" >> "$GITHUB_OUTPUT"
-          echo "gate: run=$RUN mail=$MAIL loop=$LOOP (CT $CT_H:$CT_M, DOW=$DOW, mailed_today=$MAILED)"
+          echo "gate: run=$RUN mail=$MAIL loop=$LOOP wait=${WAIT}s (CT $CT_H:$CT_M, DOW=$DOW, mailed_today=$MAILED)"
+
+      - name: Wait for 9:00 AM Central
+        if: steps.gate.outputs.run == 'true' && steps.gate.outputs.wait != '0'
+        run: |
+          echo "9시 전 도착 → CT 8:56까지 ${{ steps.gate.outputs.wait }}초 대기 (9시 정각 발송용)"
+          sleep ${{ steps.gate.outputs.wait }}
 
       - uses: actions/setup-python@v5
         if: steps.gate.outputs.run == 'true'
@@ -145,8 +155,8 @@ jobs:
               echo "장중 갱신 종료 (다음 슬롯 CT $NEXT 는 마감 이후)"
               break
             fi
-            if [ "$SECONDS" -gt 19200 ]; then
-              echo "장중 갱신 종료 (실행 시간 상한 도달 — 6시간 작업 한도 보호)"
+            if [ "$(date +%s)" -gt "${{ steps.gate.outputs.deadline }}" ]; then
+              echo "장중 갱신 종료 (작업 시간 상한 도달 — 6시간 한도 보호)"
               break
             fi
             echo "다음 갱신 CT $NEXT 까지 ${WAIT}초 대기"

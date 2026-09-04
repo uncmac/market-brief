@@ -3,7 +3,7 @@
 """매일 대시보드 갱신 후 가족에게 알림 메일 발송 (GitHub Actions에서 실행).
 필요한 GitHub Secrets: MAIL_FROM(보내는 Gmail), GMAIL_APP_PASSWORD(앱 비밀번호),
 MAIL_TO(받는 주소들, 쉼표로 구분). 하나라도 없으면 발송을 건너뛴다."""
-import os, re, smtplib, ssl
+import os, re, smtplib, ssl, time
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.utils import formatdate
@@ -53,7 +53,21 @@ msg["From"] = frm
 msg["To"] = to
 msg["Date"] = formatdate(localtime=True)
 
-with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ssl.create_default_context()) as s:
-    s.login(frm, pw)
-    s.sendmail(frm, [x.strip() for x in to.split(",") if x.strip()], msg.as_string())
-print("메일 발송 완료 →", to)
+rcpt = [x.strip() for x in to.split(",") if x.strip()]
+
+# Gmail 일시 오류(연결 끊김·일시적 거부)에 대비해 3회까지 재시도.
+# 3회 모두 실패하면 예외로 종료 → 작업이 실패로 표시되고, 마커가 남지 않아
+# 다음 재시도 슬롯(오전 내)이 다시 발송을 시도한다.
+for attempt in range(1, 4):
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465,
+                              context=ssl.create_default_context(), timeout=60) as s:
+            s.login(frm, pw)
+            s.sendmail(frm, rcpt, msg.as_string())
+        print(f"메일 발송 완료 (시도 {attempt}회차) →", to)
+        break
+    except Exception as e:
+        print(f"[경고] 메일 발송 실패 (시도 {attempt}/3): {type(e).__name__}: {e}")
+        if attempt == 3:
+            raise
+        time.sleep(30 * attempt)
