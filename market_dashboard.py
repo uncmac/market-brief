@@ -30,6 +30,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
+from trading_calendar import US_MARKET_HOLIDAYS
 
 warnings.filterwarnings("ignore")
 
@@ -68,17 +69,7 @@ ST = {
     "G2R":   {"key": "G2R",   "label": "GREEN → RED", "color": "#fb923c", "desc": "고점·악화 전환"},
     "RED":   {"key": "RED",   "label": "RED",         "color": "#ef4444", "desc": "하락 위험"},
 }
-# 미국 증시 휴장일 (NYSE, 관측일 기준). 매년 말 다음 해 날짜 추가 필요.
-# 조기폐장일(반일장)은 포함하지 않음. 목록에 없는 해가 되면 휴장일이
-# "데이터 지연"으로 표시될 뿐 동작은 유지된다.
-US_MARKET_HOLIDAYS = {
-    # 2026
-    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
-    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
-    # 2027
-    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
-    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
-}
+# 미국 증시 휴장일은 trading_calendar.py에서 발송 정책과 함께 관리한다.
 # 다국어: 대시보드는 한국어·영어 두 벌을 렌더링하고 CSS 토글로 전환한다.
 LANGS = ("ko", "en")
 DOW = {"ko": ["월", "화", "수", "목", "금", "토", "일"],
@@ -1581,9 +1572,11 @@ def main():
     ap.add_argument("--demo", action="store_true", help="모의 데이터로 실행")
     ap.add_argument("--fg", type=int, default=None, help="Fear & Greed 수동 입력")
     ap.add_argument("-o", "--out", default="market_dashboard.html")
+    ap.add_argument("--no-publish", action="store_true",
+                    help="HTML만 생성 (CI에서 별도 게시할 때 사용)")
     # Jupyter 커널이 넘기는 -f kernel-xxx.json 같은 미지 인자는 무시
     args, _unknown = ap.parse_known_args()
-    run(demo=args.demo, fg=args.fg, out=args.out)
+    run(demo=args.demo, fg=args.fg, out=args.out, web=not args.no_publish)
 
 
 if __name__ == "__main__":

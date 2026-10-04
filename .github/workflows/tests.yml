@@ -1,0 +1,34 @@
+name: delivery-tests
+on:
+  push:
+    paths:
+      - '**.py'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - '**.py'
+      - '.github/workflows/**'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install numpy pandas requests tzdata
+      - run: python -m unittest discover -s tests -v
+      - name: Build a demo dashboard and verify email parsing without sending
+        run: |
+          python market_dashboard.py --demo --no-publish -o /tmp/market-brief-demo.html
+          python - <<'PY'
+          from datetime import datetime
+          from pathlib import Path
+          from delivery_policy import CENTRAL
+          from send_mail import make_message
+          make_message(Path('/tmp/market-brief-demo.html').read_text(),
+                       'sender@example.com', ['recipient@example.com'], datetime.now(CENTRAL))
+          print('Demo dashboard can be parsed into an email; no SMTP connection made')
+          PY
