@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from delivery_policy import CENTRAL
 from morning_delivery import eligible, run
+from send_mail import DeliveryPersistenceError
 
 ENV = {'MAIL_FROM': 'sender@example.com', 'MAIL_PASS': 'test-only',
        'MAIL_TO': 'one@example.com'}
@@ -63,6 +64,15 @@ class MorningTests(unittest.TestCase):
         run(clock=lambda: datetime(2026, 10, 6, 9, tzinfo=CENTRAL), build=build, send=send)
         build.assert_not_called()
         send.assert_not_called()
+
+    @patch.dict(os.environ, ENV)
+    @patch('morning_delivery.marker', return_value='')
+    def test_sender_checkpoint_failure_is_not_transport_retry(self, _):
+        send = Mock(side_effect=DeliveryPersistenceError('disk failure after SMTP'))
+        with self.assertRaises(DeliveryPersistenceError):
+            run(clock=lambda: datetime(2026, 10, 6, 9, tzinfo=CENTRAL),
+                build=lambda: None, send=send, save=Mock(), verify=lambda: False)
+        self.assertEqual(send.call_count, 1)
 
     @patch.dict(os.environ, ENV)
     @patch('morning_delivery.marker', return_value='')

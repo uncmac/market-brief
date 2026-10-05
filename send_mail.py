@@ -24,6 +24,10 @@ from delivery_policy import CENTRAL, plan
 URL = "https://uncmac.github.io/market-brief/"
 
 
+class DeliveryPersistenceError(RuntimeError):
+    """Acceptance could not be saved; automatic SMTP retries must stop."""
+
+
 def configuration(env):
     values = [env.get(key, "").strip() for key in ("MAIL_FROM", "MAIL_PASS", "MAIL_TO")]
     if not all(values):
@@ -110,7 +114,7 @@ def deliver(sender, password, recipients, message, accepted, checkpoint,
                 except OSError:
                     # A disk failure is not a transport failure. Stop instead of
                     # retrying mail whose acceptance could not be recorded.
-                    raise RuntimeError("Cannot persist accepted recipients; inspect before retrying") from None
+                    raise DeliveryPersistenceError("Cannot persist accepted recipients; inspect before retrying") from None
                 pending = [r for r in pending if r in refused]
             print(f"SMTP attempt {attempt}: {len(newly_accepted)} accepted, "
                   f"{len(pending)} pending (addresses withheld)")

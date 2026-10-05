@@ -10,7 +10,7 @@ from pathlib import Path
 
 from delivery_policy import CENTRAL
 from trading_calendar import is_trading_day
-from send_mail import configuration, recipient_id, send_once
+from send_mail import DeliveryPersistenceError, configuration, recipient_id, send_once
 
 
 def eligible(now, last_sent):
@@ -85,6 +85,8 @@ def run(clock=lambda: datetime.now(CENTRAL), sleep=time.sleep,
                                - clock()).total_seconds()))
             try:
                 send()
+            except DeliveryPersistenceError:
+                raise
             except (RuntimeError, ValueError, OSError) as error:
                 print(f'Mail attempt {attempt + 1} failed: {type(error).__name__}', flush=True)
             # Outside the send exception handler: failed state persistence MUST abort.
