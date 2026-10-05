@@ -6,11 +6,20 @@ Daily market dashboard: https://uncmac.github.io/market-brief/
 
 - Target: **09:00 America/Chicago on US stock market trading days**. The timezone
   handles daylight saving time. Weekends and full-day exchange holidays never send.
-- GitHub Actions schedules are best effort, not a punctual delivery guarantee.
-  The 09:17/09:47 and subsequent daytime runs recover an unsent briefing if the
-  09:00 run is delayed or dropped. A run arriving after 13:00 can still send that
-  Central day's briefing. No prior-day backfill is sent.
-- Each run finishes after one dashboard refresh; it no longer sleeps for hours.
+- `morning-mail` is independent of dashboard publishing. It prepares at 08:41
+  and 08:51, builds near 08:59 and waits until 09:00 before attempting SMTP.
+- Every five minutes from 09:00 through 23:55 Central, a scheduled check exits
+  immediately if today is already sent. Otherwise it retries the missing briefing.
+  A worker retries failed builds/mail up to ten cycles, waiting 60 seconds between
+  cycles; SMTP also retries at 30/60-second intervals. Partial acceptance is saved
+  after each cycle and already accepted recipients are excluded from retries.
+- These are requested schedule times, not guaranteed execution times. GitHub may
+  delay/drop ALL morning triggers. More triggers improve recovery opportunities,
+  but an independent hosted scheduler/executor is needed for stronger punctuality.
+- Success requires all configured recipients' SMTP receipts AND the durable daily
+  marker. Persistence errors stop that worker instead of blindly resending.
+- Dashboard refreshes run separately at 09:00, hourly at :17 from 10:17–16:17,
+  and once on weekends. A publishing failure cannot prevent the mail attempt.
 - `.mail_sent` is the Central date when SMTP accepted mail for all recipients.
   `.mail_delivery.json` tracks partial acceptance so retries skip those recipients.
   It stores keyed identifiers, never email addresses. Changing the mail password
@@ -32,10 +41,10 @@ as fully delivered.
 Repository Actions secrets: `MAIL_FROM`, `GMAIL_APP_PASSWORD`, `MAIL_TO` (comma- or
 semicolon-separated addresses). Do not commit credentials or recipient lists.
 
-**Safe manual refresh:** Actions → dashboard-updates → Run workflow, leaving
-`send_mail` unchecked (the default). This updates the dashboard without sending.
-Checking `send_mail` requests any unsent briefing for today, still restricted to
-trading days after 09:00 Central and subject to the delivery ledger.
+**Safe manual refresh:** Actions → dashboard-updates → Run workflow updates
+only the dashboard. Actions → morning-mail → Run workflow checks and retries the
+unsent trading-day briefing (preparation starts no earlier than 08:40; SMTP no
+earlier than 09:00). Re-running after success verifies the receipts without SMTP.
 
 Failed settings, build, SMTP, or persistence steps make the workflow fail. Inspect
 the delivery summary and failed step in Actions. Provider-specific bounce or spam
@@ -57,3 +66,12 @@ Tests use fake SMTP servers and temporary ledgers. `--no-publish` prevents the
 dashboard script's optional local GitHub publishing helper from running. Running
 `send_mail.py` without `--check-config` is a real send attempt: do not use it as a
 test against production credentials.
+
+## October 5 follow-up
+
+The first scheduled dashboard run on October 5 was created at 21:23 UTC
+(16:23 Central). Its SMTP log confirms four accepted recipients at 16:24:12.
+This was late scheduler delivery, not a rejected Gmail login. The independent
+morning workflow adds early preparation, five-minute recovery checks and tested
+in-worker retries; it does not claim that GitHub now guarantees 09:00 execution.
+The computer does not have to stay on. Inbox/spam placement is not visible here.

@@ -1,21 +1,15 @@
 name: dashboard-updates
 
-# 09:00 Central is a target, not a GitHub Actions SLA. Retries also recover
-# runs delivered hours late. No long-running sleep loop blocks the queue.
+# Dashboard refresh only. Independent morning-mail workflow owns all email.
 on:
   schedule:
     - cron: '0 9 * * 1-5'
       timezone: America/Chicago
-    - cron: '17,47 9-17 * * 1-5'
+    - cron: '17 10-16 * * 1-5'
       timezone: America/Chicago
     - cron: '7 9 * * 0,6'
       timezone: America/Chicago
   workflow_dispatch:
-    inputs:
-      send_mail:
-        description: '오늘 미발송 메일도 발송 (거래일, CT 09:00 이후만)'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -36,26 +30,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Gate (Central time, trading calendar, daily marker)
-        id: gate
-        env:
-          REQUEST_MAIL: ${{ inputs.send_mail }}
-        run: python delivery_policy.py
-      - name: Validate mail settings before doing work
-        if: steps.gate.outputs.mail == 'true'
-        env:
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          MAIL_PASS: ${{ secrets.GMAIL_APP_PASSWORD }}
-          MAIL_TO: ${{ secrets.MAIL_TO }}
-        run: python send_mail.py --check-config
       - name: Install dashboard dependencies
-        if: steps.gate.outputs.run == 'true'
         run: pip install yfinance pandas requests tzdata
       - name: Build dashboard
-        if: steps.gate.outputs.run == 'true'
         run: python market_dashboard.py --no-publish -o index.html
       - name: Publish dashboard
-        if: steps.gate.outputs.run == 'true'
         run: |
           git config user.name "dashboard-bot"
           git config user.email "actions@github.com"
@@ -65,38 +44,3 @@ jobs:
             git pull --rebase
             git push origin HEAD:main
           fi
-      - name: Send email notification
-        id: mail
-        if: steps.gate.outputs.mail == 'true'
-        env:
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
-          MAIL_PASS: ${{ secrets.GMAIL_APP_PASSWORD }}
-          MAIL_TO: ${{ secrets.MAIL_TO }}
-        run: python send_mail.py
-      - name: Persist delivery progress even after partial failure
-        if: always() && (steps.mail.outcome == 'success' || steps.mail.outcome == 'failure')
-        run: |
-          git config user.name "dashboard-bot"
-          git config user.email "actions@github.com"
-          for file in .mail_sent .mail_delivery.json; do
-            if [ -f "$file" ]; then git add "$file"; fi
-          done
-          if ! git diff --cached --quiet; then
-            git commit -m "record mail delivery $(date -u +'%Y-%m-%d %H:%M UTC')"
-            for attempt in 1 2 3; do
-              git pull --rebase && git push origin HEAD:main && exit 0
-              sleep 5
-            done
-            echo "::error::Could not persist delivery state; inspect before retrying mail"
-            exit 1
-          fi
-      - name: Delivery summary
-        if: always()
-        env:
-          REASON: ${{ steps.gate.outputs.reason }}
-          MAIL_OUTCOME: ${{ steps.mail.outcome }}
-        run: |
-          echo "### Market brief delivery" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Decision: $REASON" >> "$GITHUB_STEP_SUMMARY"
-          echo "- SMTP step: $MAIL_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Accepted by SMTP does not confirm inbox delivery." >> "$GITHUB_STEP_SUMMARY"

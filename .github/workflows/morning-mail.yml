@@ -1,0 +1,82 @@
+name: morning-mail
+on:
+  schedule:
+    - cron: '41,51 8 * * 1-5'
+      timezone: America/Chicago
+    - cron: '*/5 9-23 * * 1-5'
+      timezone: America/Chicago
+  workflow_dispatch:
+
+permissions:
+  contents: write
+concurrency:
+  group: morning-mail
+  cancel-in-progress: false
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Check today's delivery record
+        id: gate
+        run: python morning_delivery.py --prepare
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.due == 'true'
+        with:
+          python-version: '3.12'
+      - name: Install dashboard dependencies
+        if: steps.gate.outputs.due == 'true'
+        run: pip install yfinance pandas requests tzdata
+      - name: Prepare, send at 9 Central, retry and verify
+        if: steps.gate.outputs.due == 'true'
+        env:
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_PASS: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: |
+          git config user.name "dashboard-bot"
+          git config user.email "actions@github.com"
+          python -u morning_delivery.py
+      - name: Preserve delivery progress after interruption
+        if: always() && steps.gate.outputs.due == 'true'
+        run: |
+          git config user.name "dashboard-bot"
+          git config user.email "actions@github.com"
+          python -c "from morning_delivery import persist; persist()"
+      - name: Verify today's saved recipient receipts
+        env:
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_PASS: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime
+          from morning_delivery import CENTRAL, marker, verified
+          today = datetime.now(CENTRAL).date().isoformat()
+          if marker() == today:
+              assert verified(os.environ, today), 'Marker and recipient receipts disagree'
+              print('VERIFIED: all configured recipients have saved SMTP acceptance receipts for today')
+          else:
+              print('No delivery due in this execution window')
+          PY
+      - name: Publish the briefing snapshot after delivery
+        if: steps.gate.outputs.due == 'true'
+        run: |
+          cp mail_dashboard.html index.html
+          git add index.html
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish morning briefing snapshot"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+      - name: Delivery result
+        if: always()
+        run: |
+          echo '### Morning mail' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Target: 09:00 America/Chicago on trading days; schedules may arrive late.' >> "$GITHUB_STEP_SUMMARY"
+          echo "Latest fully accepted Central date: $(cat .mail_sent)" >> "$GITHUB_STEP_SUMMARY"
+          echo 'SMTP acceptance confirms server receipt, not inbox placement.' >> "$GITHUB_STEP_SUMMARY"

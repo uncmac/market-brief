@@ -2,3 +2,5 @@ __pycache__/
 *.py[cod]
 .mail_delivery.json.tmp
 .mail_sent.tmp
+
+mail_dashboard.html
