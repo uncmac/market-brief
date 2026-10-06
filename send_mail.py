@@ -54,10 +54,17 @@ def make_message(html, sender, recipients, now):
     asof = find(r'기준일 <b>([^<]+)</b>')
     kind = find(r'기준일 <b>[^<]+</b> ([^<]+)<')
     warn = find(r'class="tag warn">([^<]+)<')
+    price_time = find(r'<meta name="price-time-ct" content="([^"]*)">')
+    missing = find(r'<meta name="price-missing" content="([^"]*)">')
     if not all((verdict, score, action, asof)):
         raise ValueError("Dashboard summary is incomplete; refusing an empty briefing")
     now = now.astimezone(CENTRAL)
     warn_line = f"\n참고: {warn}" if warn else ""
+    if price_time:
+        warn_line += f"\n오늘 장중 가격 확인 시각: {price_time} (공급처 지연 가능)"
+    if missing:
+        warn_line += f"\n장중 가격을 확인하지 못한 종목: {missing}"
+    warn_line += '\n마감 30분 지표는 전일 마감 기준이며, 공매도 비중은 별도 발표일 기준입니다.'
     body = f"""오늘의 시장 브리핑이 갱신되었습니다.
 
 기준일: {asof} {kind}{warn_line}
@@ -65,7 +72,7 @@ def make_message(html, sender, recipients, now):
 권장 행동: {action}
 
 전체 대시보드 보기:
-{URL}
+{URL}?brief={now:%Y%m%d%H%M}
 
 (미국 증시 거래일 중부시간 오전 9시 발송을 목표로 합니다.
 예약 실행이나 데이터 수집이 지연되면 늦게 도착할 수 있습니다.)"""
@@ -146,7 +153,12 @@ def send_once(env, now=None, html_path="index.html", marker_path=".mail_sent",
         atomic_write(state_file, json.dumps({"date": today, "accepted": sorted(ids)},
                                            indent=2) + "\n")
 
-    message = make_message(Path(html_path).read_text(encoding="utf-8"),
+    html = Path(html_path).read_text(encoding='utf-8')
+    if env.get('MAIL_REQUIRE_FRESH') == 'true':
+        from intraday_prices import require_fresh
+        match = re.search(r'<meta name="price-asof" content="([^"]*)">', html)
+        require_fresh(unescape(match.group(1)) if match else '', now)
+    message = make_message(html,
                            sender, recipients, now)
     deliver(sender, password, recipients, message, accepted, checkpoint,
             smtp_factory=smtp_factory, sleep=sleep)

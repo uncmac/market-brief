@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -55,6 +56,39 @@ def verified(env, today):
             all(recipient_id(r, password) in state.get('accepted', []) for r in recipients))
 
 
+def build_and_publish():
+    import requests
+    from intraday_prices import require_fresh
+    subprocess.run([sys.executable, 'market_dashboard.py', '--no-publish', '--require-fresh',
+                    '-o', 'mail_dashboard.html'], check=True, timeout=240)
+    snapshot = Path('mail_dashboard.html').read_text(encoding='utf-8')
+    Path('index.html').write_text(snapshot, encoding='utf-8')
+    subprocess.run(['git', 'add', 'index.html'], check=True)
+    changed = subprocess.run(['git', 'diff', '--cached', '--quiet']).returncode
+    if changed == 1:
+        subprocess.run(['git', 'commit', '-m', 'Publish current-session morning briefing'], check=True)
+        subprocess.run(['git', 'pull', '--rebase', 'origin', 'main'], check=True)
+        subprocess.run(['git', 'push', 'origin', 'HEAD:main'], check=True)
+    elif changed != 0:
+        raise RuntimeError('Cannot inspect briefing snapshot')
+    # Pages publishing is asynchronous. Do not email a link still serving yesterday.
+    expected = re.search(r'<meta name="price-asof" content="([^"]+)"', snapshot).group(1)
+    for attempt in range(12):
+        try:
+            response = requests.get('https://uncmac.github.io/market-brief/',
+                                    params={'brief': time.time_ns()}, timeout=15)
+            response.raise_for_status()
+            stamp = re.search(r'<meta name="price-asof" content="([^"]+)"', response.text)
+            if stamp and datetime.fromisoformat(stamp.group(1)) >= datetime.fromisoformat(expected):
+                require_fresh(stamp.group(1), datetime.now(CENTRAL))
+                print('Verified current-session briefing is visible on the public dashboard', flush=True)
+                return
+        except (requests.RequestException, ValueError):
+            pass
+        time.sleep(10)
+    raise RuntimeError('Current dashboard is not published yet; retry before sending')
+
+
 def run(clock=lambda: datetime.now(CENTRAL), sleep=time.sleep,
         build=None, send=None, save=None, verify=None, attempts=10):
     if not eligible(clock(), marker()):
@@ -62,22 +96,20 @@ def run(clock=lambda: datetime.now(CENTRAL), sleep=time.sleep,
         return
     configuration(os.environ)
     today = clock().date().isoformat()
-    build = build or (lambda: subprocess.run(
-        [sys.executable, 'market_dashboard.py', '--no-publish', '-o', 'mail_dashboard.html'],
-        check=True, timeout=240))
-    send = send or (lambda: send_once(os.environ, html_path='mail_dashboard.html'))
+    build = build or build_and_publish
+    send = send or (lambda: send_once(dict(os.environ, MAIL_REQUIRE_FRESH='true'), html_path='mail_dashboard.html'))
     save = save or persist
     verify = verify or (lambda: verified(os.environ, today))
     # Prepare near 09:00 instead of depending on the 09:00 cron arriving on time.
-    while clock().hour < 9 and clock().hour * 60 + clock().minute < 539:
-        sleep(min(30, (clock().replace(hour=8, minute=59, second=0, microsecond=0)
+    while clock().hour < 9 and clock().hour * 60 + clock().minute < 536:
+        sleep(min(30, (clock().replace(hour=8, minute=56, second=0, microsecond=0)
                        - clock()).total_seconds()))
     for attempt in range(attempts):
         if clock().date().isoformat() != today:
             raise RuntimeError('Central date changed; never send yesterday as today')
         try:
             build()
-        except (subprocess.SubprocessError, OSError) as error:
+        except (subprocess.SubprocessError, OSError, RuntimeError) as error:
             print(f'Dashboard attempt {attempt + 1} failed: {type(error).__name__}', flush=True)
         else:
             while clock().hour < 9:

@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 from trading_calendar import US_MARKET_HOLIDAYS
+from intraday_prices import overlay, require_fresh, CENTRAL
 
 warnings.filterwarnings("ignore")
 
@@ -290,6 +291,9 @@ def fetch_real(fg_manual=None):
     # P6: 마감 30분 순매수 — 30분봉의 마지막 봉 수익률 (최근 ~30거래일)
     intr = hist("SPY", period="30d", interval="30m")
     last_bar = intr.groupby(intr.index.date).tail(1)
+    # Today's opening bar is not the closing 30 minutes. Keep completed past sessions.
+    if (now_eastern().hour, now_eastern().minute) < (16, 0):
+        last_bar = last_bar[last_bar.index.date < now_eastern().date()]
     ret30 = last_bar["Close"] / last_bar["Open"] - 1
     idx30 = pd.to_datetime([d.date() for d in last_bar.index])
     eod_bool = pd.Series((ret30 > CONFIG["eod_ret"]).values, index=idx30)
@@ -331,9 +335,24 @@ def fetch_real(fg_manual=None):
         except Exception as e:
             print(f"[경고] CNN F&G 조회 실패 → N/A 처리, run(fg=값) 또는 --fg 로 수동 입력: {e}")
 
-    return {"spy": spy, "vix": vix, "btc": btc, "fang": fang,
+    data = {"spy": spy, "vix": vix, "btc": btc, "fang": fang,
             "watch": watch, "eod": eod_bool, "eod_vals": eod_vals, "fg": fg,
             "news": fetch_news(), "shorts": fetch_shorts(), "mode": "live"}
+    now = now_eastern()
+    if now.weekday() < 5 and str(now.date()) not in US_MARKET_HOLIDAYS and (now.hour, now.minute) >= (9, 30):
+        tickers = list(dict.fromkeys(['SPY', '^VIX', *fang.columns, *watch.columns]))
+        quotes = {}
+        try:
+            minute = yf.download(tickers, period='1d', interval='1m', prepost=False,
+                                 auto_adjust=True, group_by='ticker', progress=False,
+                                 threads=True, timeout=15)
+            for ticker in tickers:
+                if ticker in minute.columns.get_level_values(0):
+                    quotes[ticker] = minute[ticker]
+        except Exception as error:
+            print(f'[경고] 장중 가격 조회 실패: {type(error).__name__}')
+        overlay(data, quotes, now_eastern())
+    return data
 
 
 def make_demo():
@@ -1348,6 +1367,10 @@ def _render_body(payload, lang):
             + (('장중' if stt == "intraday" else '종가') if ko else
                ('intraday' if stt == "intraday" else 'close')) + '</span>'
             + asof_tag
+            + ('<span class="tag">' + ('가격 확인 시각 ' if ko else 'Price timestamp ')
+               + _esc(a['price_time_ct']) + '</span>' if a.get('price_time_ct') else '')
+            + ('<span class="tag warn">' + ('장중 가격 확인 불가: ' if ko else 'Intraday price unavailable: ')
+               + _esc(', '.join(a['price_missing'])) + '</span>' if a.get('price_missing') else '')
             + '<span class="tag">' + ('BTC 기준 ' if ko else 'BTC as of ')
             + '<b>' + a["btc"] + ' (' + fdow(a["btc_dow"]) + ')</b> · '
             + ('24시간 거래라 주말·휴일에도 최신' if ko else 'trades 24/7, so current even on weekends/holidays')
@@ -1402,6 +1425,9 @@ def render_html(payload):
     btn = ('<label for="lang-sw" class="lang-btn mono">'
            '<span class="opt opt-ko">한국어</span><span class="opt opt-en">English</span></label>')
     return ('<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">'
+            + '<meta name="price-asof" content="' + _esc(payload['asof'].get('price_stamp', '')) + '">'
+            + '<meta name="price-time-ct" content="' + _esc(payload['asof'].get('price_time_ct', '')) + '">'
+            + '<meta name="price-missing" content="' + _esc(', '.join(payload['asof'].get('price_missing', []))) + '">'
             + '<meta name="viewport" content="width=device-width, initial-scale=1">'
             + "<title>Jaeyoung Cho's Morning Brief</title><style>" + _CSS + '</style></head><body>'
             + toggle
@@ -1426,12 +1452,15 @@ def jsonable(x):
     return x
 
 
-def build_payload(demo=False, fg=None):
+def build_payload(demo=False, fg=None, fresh=False):
     """데이터 수집 → 신호 계산 → payload(dict) 반환. 대시보드·이메일 공용."""
     data = make_demo() if demo else fetch_real(fg)
 
     # ---- 기준일 / 휴장일 판정 ----
     now_et = now_eastern()
+    price_stamp = data.get('price_stamps', {}).get('SPY', '')
+    if fresh:
+        require_fresh(price_stamp, now_et)
     today = now_et.date()
     eq_asof = data["spy"].index[-1].date()
     btc_asof = data["btc"].index[-1].date()
@@ -1499,6 +1528,10 @@ def build_payload(demo=False, fg=None):
             "equity": str(eq_asof), "equity_dow": eq_asof.weekday(),
             "today": str(today), "today_dow": today.weekday(),
             "status": mkt_status,
+            "price_stamp": price_stamp,
+            "price_time_ct": (pd.Timestamp(price_stamp).tz_convert(CENTRAL).strftime('%Y-%m-%d %H:%M CT')
+                              if price_stamp else ''),
+            "price_missing": data.get('price_missing', []),
             "btc": str(btc_asof), "btc_dow": btc_asof.weekday(),
         },
         "tfs": tfs, "texts": texts, "states": ST,
@@ -1547,9 +1580,9 @@ def publish(src="market_dashboard.html"):
     return True
 
 
-def run(demo=False, fg=None, out="market_dashboard.html", show=False, web=True):
+def run(demo=False, fg=None, out="market_dashboard.html", show=False, web=True, fresh=False):
     """대시보드 HTML 생성·저장. Jupyter: run(show=True) 등. web=True면 GitHub Pages에도 자동 게시."""
-    payload = build_payload(demo, fg)
+    payload = build_payload(demo, fg, fresh=fresh)
     with open(out, "w", encoding="utf-8") as f:
         f.write(render_html(payload))
     print(f"저장 완료 → {out}")
@@ -1574,9 +1607,10 @@ def main():
     ap.add_argument("-o", "--out", default="market_dashboard.html")
     ap.add_argument("--no-publish", action="store_true",
                     help="HTML만 생성 (CI에서 별도 게시할 때 사용)")
+    ap.add_argument('--require-fresh', action='store_true', help='오늘 장중 가격 확인 실패 시 재시도를 위해 종료')
     # Jupyter 커널이 넘기는 -f kernel-xxx.json 같은 미지 인자는 무시
     args, _unknown = ap.parse_known_args()
-    run(demo=args.demo, fg=args.fg, out=args.out, web=not args.no_publish)
+    run(demo=args.demo, fg=args.fg, out=args.out, web=not args.no_publish, fresh=args.require_fresh)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ Daily market dashboard: https://uncmac.github.io/market-brief/
 - Target: **09:00 America/Chicago on US stock market trading days**. The timezone
   handles daylight saving time. Weekends and full-day exchange holidays never send.
 - `morning-mail` is independent of dashboard publishing. It prepares at 08:41
-  and 08:51, builds near 08:59 and waits until 09:00 before attempting SMTP.
+  and 08:51, builds near 08:56 and waits until 09:00 before attempting SMTP.
 - Every five minutes from 09:00 through 23:55 Central, a scheduled check exits
   immediately if today is already sent. Otherwise it retries the missing briefing.
   A worker retries failed builds/mail up to ten cycles, waiting 60 seconds between
@@ -18,8 +18,8 @@ Daily market dashboard: https://uncmac.github.io/market-brief/
   but an independent hosted scheduler/executor is needed for stronger punctuality.
 - Success requires all configured recipients' SMTP receipts AND the durable daily
   marker. Persistence errors stop that worker instead of blindly resending.
-- Dashboard refreshes run separately at 09:00, hourly at :17 from 10:17–16:17,
-  and once on weekends. A publishing failure cannot prevent the mail attempt.
+- Dashboard refreshes run separately at 09:00, hourly at :17 from 10:17â€“16:17,
+  and once on weekends. Morning mail waits for the current-session snapshot to appear on Pages.
 - `.mail_sent` is the Central date when SMTP accepted mail for all recipients.
   `.mail_delivery.json` tracks partial acceptance so retries skip those recipients.
   It stores keyed identifiers, never email addresses. Changing the mail password
@@ -27,7 +27,7 @@ Daily market dashboard: https://uncmac.github.io/market-brief/
 - SMTP acceptance does not prove inbox placement. A lost connection after SMTP DATA,
   or failure to push the delivery ledger after sending, can leave delivery ambiguous.
   Review failed runs before manually retrying in those cases.
-- The shared calendar is explicit for 2026–2027. Update `trading_calendar.py` before
+- The shared calendar is explicit for 2026â€“2027. Update `trading_calendar.py` before
   2028; unknown years fail closed instead of sending on an unverified holiday.
 
 The October 2026 delivery fix addresses runs that started hours late and were
@@ -41,8 +41,8 @@ as fully delivered.
 Repository Actions secrets: `MAIL_FROM`, `GMAIL_APP_PASSWORD`, `MAIL_TO` (comma- or
 semicolon-separated addresses). Do not commit credentials or recipient lists.
 
-**Safe manual refresh:** Actions → dashboard-updates → Run workflow updates
-only the dashboard. Actions → morning-mail → Run workflow checks and retries the
+**Safe manual refresh:** Actions â†’ dashboard-updates â†’ Run workflow updates
+only the dashboard. Actions â†’ morning-mail â†’ Run workflow checks and retries the
 unsent trading-day briefing (preparation starts no earlier than 08:40; SMTP no
 earlier than 09:00). Re-running after success verifies the receipts without SMTP.
 
@@ -75,3 +75,16 @@ This was late scheduler delivery, not a rejected Gmail login. The independent
 morning workflow adds early preparation, five-minute recovery checks and tested
 in-worker retries; it does not claim that GitHub now guarantees 09:00 execution.
 The computer does not have to stay on. Inbox/spam placement is not visible here.
+
+## Morning data freshness
+
+Morning email overlays today's completed regular-session one-minute quotes onto
+the daily history. SPY must have today's timestamp within 20 minutes of the query
+(or the regular close for late recovery); this is a maximum allowed delay, not a
+claim of exchange real-time data. Its actual Central timestamp is shown. Missing
+intraday quotes for other tickers are disclosed. Closing-30-minute signals exclude
+today's opening bar; short-interest data retain their original reporting dates.
+Both collection and SMTP validate freshness. Stale data trigger retry, never a
+success marker. The worker also waits for the new snapshot to be visible on Pages
+before sending the link. If prices or publishing are delayed, mail can arrive later
+than 09:00. No market-risk-lab files are changed.

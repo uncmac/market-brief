@@ -63,16 +63,6 @@ jobs:
           else:
               print('No delivery due in this execution window')
           PY
-      - name: Publish the briefing snapshot after delivery
-        if: steps.gate.outputs.due == 'true'
-        run: |
-          cp mail_dashboard.html index.html
-          git add index.html
-          if ! git diff --cached --quiet; then
-            git commit -m "Publish morning briefing snapshot"
-            git pull --rebase origin main
-            git push origin HEAD:main
-          fi
       - name: Delivery result
         if: always()
         run: |
